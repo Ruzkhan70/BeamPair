@@ -1,0 +1,327 @@
+{
+  "entities": {
+    "Admin": {
+      "title": "Admin",
+      "description": "Authorized administrator profile record.",
+      "type": "object",
+      "properties": {
+        "email": {
+          "type": "string",
+          "format": "email",
+          "description": "Administrator email address."
+        },
+        "role": {
+          "type": "string",
+          "enum": ["admin", "superadmin"],
+          "description": "Role level of the administrator."
+        },
+        "createdAt": {
+          "type": "string",
+          "description": "Timestamp when the admin was initialized."
+        }
+      },
+      "required": ["email", "role", "createdAt"]
+    },
+    "PairingToken": {
+      "title": "PairingToken",
+      "description": "Single-use cryptographically generated pairing token for secondary device onboarding.",
+      "type": "object",
+      "properties": {
+        "token": {
+          "type": "string",
+          "maxLength": 128,
+          "pattern": "^[a-zA-Z0-9_-]+$",
+          "description": "Cryptographically secure random token string."
+        },
+        "adminId": {
+          "type": "string",
+          "maxLength": 128,
+          "pattern": "^[a-zA-Z0-9_-]+$",
+          "description": "UID of the admin who generated the pairing code."
+        },
+        "adminEmail": {
+          "type": "string",
+          "maxLength": 254,
+          "description": "Email address of the admin."
+        },
+        "status": {
+          "type": "string",
+          "enum": ["pending", "redeemed", "expired", "cancelled"],
+          "description": "Lifecycle state of the pairing token."
+        },
+        "expiresAt": {
+          "type": "number",
+          "description": "Epoch timestamp in milliseconds after which the token expires."
+        },
+        "redeemedAt": {
+          "type": "number",
+          "description": "Epoch timestamp when the token was redeemed."
+        },
+        "redeemedByDeviceId": {
+          "type": "string",
+          "maxLength": 128,
+          "pattern": "^[a-zA-Z0-9_-]+$",
+          "description": "Device ID that successfully redeemed this token."
+        },
+        "createdAt": {
+          "type": "string",
+          "description": "Server timestamp of token generation."
+        }
+      },
+      "required": ["token", "adminId", "adminEmail", "status", "expiresAt"]
+    },
+    "Device": {
+      "title": "Device",
+      "description": "Registered secondary phone paired to an administrator.",
+      "type": "object",
+      "properties": {
+        "deviceId": {
+          "type": "string",
+          "maxLength": 128,
+          "pattern": "^[a-zA-Z0-9_-]+$",
+          "description": "Unique identifier of the registered device."
+        },
+        "adminId": {
+          "type": "string",
+          "maxLength": 128,
+          "pattern": "^[a-zA-Z0-9_-]+$",
+          "description": "Owner administrator user ID."
+        },
+        "deviceName": {
+          "type": "string",
+          "maxLength": 100,
+          "description": "User-friendly name of the phone."
+        },
+        "deviceModel": {
+          "type": "string",
+          "maxLength": 100,
+          "description": "Hardware model or browser user agent snippet."
+        },
+        "platform": {
+          "type": "string",
+          "enum": ["android", "ios", "desktop", "other"],
+          "description": "Operating system platform."
+        },
+        "status": {
+          "type": "string",
+          "enum": ["online", "offline"],
+          "description": "Current connection status."
+        },
+        "lastSeen": {
+          "type": "number",
+          "description": "Epoch timestamp of last heartbeat."
+        },
+        "pairedAt": {
+          "type": "number",
+          "description": "Epoch timestamp of successful pairing."
+        },
+        "isRevoked": {
+          "type": "boolean",
+          "description": "Whether administrator has revoked access for this device."
+        },
+        "cameraPermission": {
+          "type": "string",
+          "enum": ["granted", "denied", "prompt", "unknown"],
+          "description": "Last recorded browser camera permission state."
+        },
+        "microphonePermission": {
+          "type": "string",
+          "enum": ["granted", "denied", "prompt", "unknown"],
+          "description": "Last recorded browser microphone permission state."
+        },
+        "screenShareSupported": {
+          "type": "boolean",
+          "description": "Whether screen capture API is supported on this device."
+        },
+        "currentSessionId": {
+          "type": "string",
+          "maxLength": 128,
+          "description": "Active session ID requested or in progress for this device."
+        }
+      },
+      "required": ["deviceId", "adminId", "deviceName", "status", "isRevoked", "pairedAt"]
+    },
+    "Session": {
+      "title": "Session",
+      "description": "Live remote support session between admin and secondary device.",
+      "type": "object",
+      "properties": {
+        "sessionId": {
+          "type": "string",
+          "maxLength": 128,
+          "pattern": "^[a-zA-Z0-9_-]+$",
+          "description": "Unique session ID."
+        },
+        "adminId": {
+          "type": "string",
+          "maxLength": 128,
+          "pattern": "^[a-zA-Z0-9_-]+$",
+          "description": "Admin UID initiating or managing session."
+        },
+        "deviceId": {
+          "type": "string",
+          "maxLength": 128,
+          "pattern": "^[a-zA-Z0-9_-]+$",
+          "description": "Target device ID."
+        },
+        "status": {
+          "type": "string",
+          "enum": ["requested", "connecting", "active", "terminated"],
+          "description": "WebRTC session lifecycle status."
+        },
+        "requestCamera": {
+          "type": "boolean",
+          "description": "Whether camera stream was requested."
+        },
+        "cameraFacing": {
+          "type": "string",
+          "enum": ["user", "environment"],
+          "description": "Requested camera lens (front or rear)."
+        },
+        "requestMicrophone": {
+          "type": "boolean",
+          "description": "Whether microphone stream was requested."
+        },
+        "requestScreen": {
+          "type": "boolean",
+          "description": "Whether screen share stream was requested."
+        },
+        "sdpOffer": {
+          "type": "string",
+          "maxLength": 100000,
+          "description": "WebRTC SDP Offer string."
+        },
+        "sdpAnswer": {
+          "type": "string",
+          "maxLength": 100000,
+          "description": "WebRTC SDP Answer string."
+        },
+        "startedAt": {
+          "type": "number",
+          "description": "Epoch timestamp of session start."
+        },
+        "endedAt": {
+          "type": "number",
+          "description": "Epoch timestamp of session termination."
+        },
+        "endedBy": {
+          "type": "string",
+          "enum": ["admin", "device", "timeout", "error"],
+          "description": "Entity that terminated the session."
+        },
+        "terminationReason": {
+          "type": "string",
+          "maxLength": 200,
+          "description": "Reason given for session disconnect."
+        }
+      },
+      "required": ["sessionId", "adminId", "deviceId", "status", "startedAt"]
+    },
+    "IceCandidate": {
+      "title": "IceCandidate",
+      "description": "WebRTC ICE candidate exchange record.",
+      "type": "object",
+      "properties": {
+        "candidate": {
+          "type": "string",
+          "maxLength": 4096,
+          "description": "Serialized RTCIceCandidate candidate string."
+        },
+        "sdpMid": {
+          "type": "string",
+          "maxLength": 128,
+          "description": "Media stream identification tag."
+        },
+        "sdpMLineIndex": {
+          "type": "number",
+          "description": "Media description index."
+        },
+        "sender": {
+          "type": "string",
+          "enum": ["admin", "device"],
+          "description": "Sender role for ICE candidate."
+        },
+        "createdAt": {
+          "type": "number",
+          "description": "Timestamp of ICE candidate generation."
+        }
+      },
+      "required": ["candidate", "sender", "createdAt"]
+    },
+    "SecurityAuditLog": {
+      "title": "SecurityAuditLog",
+      "description": "Immutable security and audit trace for compliance.",
+      "type": "object",
+      "properties": {
+        "adminId": {
+          "type": "string",
+          "maxLength": 128,
+          "pattern": "^[a-zA-Z0-9_-]+$",
+          "description": "Admin UID related to the event."
+        },
+        "deviceId": {
+          "type": "string",
+          "maxLength": 128,
+          "description": "Associated device ID if applicable."
+        },
+        "eventType": {
+          "type": "string",
+          "enum": [
+            "PAIRING_TOKEN_GENERATED",
+            "PAIRING_TOKEN_REDEEMED",
+            "PAIRING_TOKEN_CANCELLED",
+            "DEVICE_REGISTERED",
+            "DEVICE_REVOKED",
+            "SESSION_REQUESTED",
+            "SESSION_CONNECTED",
+            "SESSION_DISCONNECTED_BY_ADMIN",
+            "SESSION_DISCONNECTED_BY_DEVICE",
+            "UNAUTHORIZED_ACCESS_ATTEMPT"
+          ],
+          "description": "Security event classification."
+        },
+        "details": {
+          "type": "string",
+          "maxLength": 500,
+          "description": "Human-readable event narrative."
+        },
+        "ipAddress": {
+          "type": "string",
+          "maxLength": 100,
+          "description": "Client IP or network origin if known."
+        },
+        "timestamp": {
+          "type": "number",
+          "description": "Epoch timestamp of log creation."
+        }
+      },
+      "required": ["eventType", "timestamp"]
+    }
+  },
+  "firestore": {
+    "/admins/{adminId}": {
+      "schema": "Admin",
+      "description": "Records of registered admin accounts."
+    },
+    "/pairingTokens/{tokenId}": {
+      "schema": "PairingToken",
+      "description": "Temporary one-time QR pairing tokens."
+    },
+    "/devices/{deviceId}": {
+      "schema": "Device",
+      "description": "Registered devices associated with admins."
+    },
+    "/sessions/{sessionId}": {
+      "schema": "Session",
+      "description": "Active and past remote support WebRTC sessions."
+    },
+    "/sessions/{sessionId}/iceCandidates/{candidateId}": {
+      "schema": "IceCandidate",
+      "description": "WebRTC ICE candidate signals for NAT traversal."
+    },
+    "/securityAuditLogs/{logId}": {
+      "schema": "SecurityAuditLog",
+      "description": "Audit trail of all administrative and pairing actions."
+    }
+  }
+}

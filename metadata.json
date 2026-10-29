@@ -1,0 +1,6 @@
+{
+  "name": "BeamPair Remote Device Support",
+  "description": "Secure QR-paired remote device support web application with real WebRTC live camera, audio, and screen streaming.",
+  "requestFramePermissions": ["camera", "microphone", "display-capture"],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}

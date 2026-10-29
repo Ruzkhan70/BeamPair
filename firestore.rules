@@ -1,0 +1,197 @@
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+
+    // Global Safety Net: Default-deny all unhandled paths
+    match /{document=**} {
+      allow read, write: if false;
+    }
+
+    // Hardened Global Primitives
+    function isSignedIn() {
+      return request.auth != null;
+    }
+
+    function isVerifiedEmail() {
+      return isSignedIn() && request.auth.token.email_verified == true;
+    }
+
+    function isBootstrappedAdmin() {
+      return isVerifiedEmail() && request.auth.token.email == 'ruzkhanhazar@gmail.com';
+    }
+
+    function isAdmin() {
+      return isBootstrappedAdmin() || (
+        isSignedIn() && exists(/databases/$(database)/documents/admins/$(request.auth.uid))
+      );
+    }
+
+    function incoming() {
+      return request.resource.data;
+    }
+
+    function existing() {
+      return resource.data;
+    }
+
+    function isValidId(id) {
+      return id is string && id.size() > 0 && id.size() <= 128 && id.matches('^[a-zA-Z0-9_\\-]+$');
+    }
+
+    // Admins Collection
+    match /admins/{adminId} {
+      allow get: if isSignedIn() && (request.auth.uid == adminId || isAdmin());
+      allow list: if isAdmin();
+      allow create: if isBootstrappedAdmin() && isValidId(adminId) && incoming().email is string;
+      allow update: if isAdmin() && incoming().email == existing().email;
+      allow delete: if false;
+    }
+
+    // Pairing Tokens Collection
+    match /pairingTokens/{tokenId} {
+      allow get: if isValidId(tokenId);
+      allow list: if isAdmin() && resource.data.adminId == request.auth.uid;
+
+      allow create: if isAdmin() && isValidId(tokenId) &&
+        incoming().keys().hasAll(['token', 'adminId', 'adminEmail', 'status', 'expiresAt']) &&
+        incoming().keys().hasOnly(['token', 'adminId', 'adminEmail', 'status', 'expiresAt', 'redeemedAt', 'redeemedByDeviceId', 'createdAt']) &&
+        incoming().adminId == request.auth.uid &&
+        incoming().token is string && incoming().token.size() <= 128 &&
+        incoming().status == 'pending' &&
+        incoming().expiresAt is number &&
+        incoming().expiresAt > request.time.toMillis();
+
+      allow update: if (
+        // Action: Admin cancels or updates token
+        (isAdmin() && existing().adminId == request.auth.uid &&
+          incoming().diff(existing()).affectedKeys().hasOnly(['status']) &&
+          incoming().status in ['cancelled', 'expired'])
+        ||
+        // Action: Secondary Device redeems valid pending token before expiration
+        (existing().status == 'pending' &&
+          request.time.toMillis() <= existing().expiresAt &&
+          incoming().diff(existing()).affectedKeys().hasOnly(['status', 'redeemedAt', 'redeemedByDeviceId']) &&
+          incoming().status == 'redeemed' &&
+          incoming().redeemedAt is number &&
+          incoming().redeemedByDeviceId is string &&
+          incoming().redeemedByDeviceId.size() <= 128)
+      );
+
+      allow delete: if isAdmin() && existing().adminId == request.auth.uid;
+    }
+
+    // Registered Devices Collection
+    match /devices/{deviceId} {
+      allow get: if isValidId(deviceId);
+      allow list: if isAdmin() && resource.data.adminId == request.auth.uid;
+
+      // Create: When a device is paired
+      allow create: if isValidId(deviceId) &&
+        incoming().keys().hasAll(['deviceId', 'adminId', 'deviceName', 'status', 'isRevoked', 'pairedAt']) &&
+        incoming().keys().hasOnly(['deviceId', 'adminId', 'deviceName', 'status', 'isRevoked', 'pairedAt', 'deviceModel', 'platform', 'cameraPermission', 'microphonePermission', 'screenShareSupported', 'lastSeen', 'currentSessionId']) &&
+        incoming().deviceId == deviceId &&
+        incoming().deviceId.size() <= 128 &&
+        incoming().adminId is string && incoming().adminId.size() <= 128 &&
+        incoming().deviceName is string && incoming().deviceName.size() <= 100 &&
+        incoming().status in ['online', 'offline'] &&
+        incoming().isRevoked == false &&
+        incoming().pairedAt is number;
+
+      // Update: Admin revokes or updates device, or Device updates heartbeat / permissions / status
+      allow update: if (
+        // Action: Admin revoking or editing device name or session
+        (isAdmin() && existing().adminId == request.auth.uid &&
+          incoming().adminId == existing().adminId &&
+          incoming().deviceId == existing().deviceId &&
+          incoming().pairedAt == existing().pairedAt &&
+          incoming().diff(existing()).affectedKeys().hasOnly(['isRevoked', 'deviceName', 'status', 'lastSeen', 'currentSessionId']))
+        ||
+        // Action: Secondary Device updating status, heartbeat, permissions (ONLY if not revoked)
+        (existing().isRevoked == false &&
+          incoming().adminId == existing().adminId &&
+          incoming().deviceId == existing().deviceId &&
+          incoming().isRevoked == existing().isRevoked &&
+          incoming().pairedAt == existing().pairedAt &&
+          incoming().diff(existing()).affectedKeys().hasOnly([
+            'status', 'lastSeen', 'cameraPermission', 'microphonePermission',
+            'screenShareSupported', 'deviceModel', 'platform', 'currentSessionId'
+          ]))
+      );
+
+      allow delete: if isAdmin() && existing().adminId == request.auth.uid;
+    }
+
+    // Sessions Collection
+    match /sessions/{sessionId} {
+      allow get: if isValidId(sessionId);
+      allow list: if isAdmin() && resource.data.adminId == request.auth.uid;
+
+      // Create: Admin initiates a session request to a registered device
+      allow create: if isAdmin() && isValidId(sessionId) &&
+        incoming().keys().hasAll(['sessionId', 'adminId', 'deviceId', 'status', 'startedAt']) &&
+        incoming().sessionId == sessionId &&
+        incoming().adminId == request.auth.uid &&
+        incoming().deviceId is string && incoming().deviceId.size() <= 128 &&
+        incoming().status in ['requested', 'connecting'] &&
+        incoming().startedAt is number;
+
+      // Update: Session state transition & WebRTC signaling
+      allow update: if (
+        // Admin actions: disconnect, offer, state update
+        (isAdmin() && existing().adminId == request.auth.uid &&
+          incoming().adminId == existing().adminId &&
+          incoming().sessionId == existing().sessionId &&
+          incoming().deviceId == existing().deviceId &&
+          incoming().startedAt == existing().startedAt &&
+          incoming().diff(existing()).affectedKeys().hasOnly([
+            'status', 'sdpOffer', 'endedAt', 'endedBy', 'terminationReason',
+            'requestCamera', 'requestMicrophone', 'requestScreen', 'cameraFacing'
+          ]))
+        ||
+        // Device actions: answer SDP, connecting/active state, end session
+        (incoming().adminId == existing().adminId &&
+          incoming().sessionId == existing().sessionId &&
+          incoming().deviceId == existing().deviceId &&
+          incoming().startedAt == existing().startedAt &&
+          incoming().diff(existing()).affectedKeys().hasOnly([
+            'status', 'sdpAnswer', 'endedAt', 'endedBy', 'terminationReason'
+          ]))
+      );
+
+      allow delete: if isAdmin() && existing().adminId == request.auth.uid;
+
+      // ICE Candidates Subcollection (Relational Sync)
+      match /iceCandidates/{candidateId} {
+        allow get: if isValidId(candidateId);
+        allow list: if true;
+
+        allow create: if isValidId(candidateId) &&
+          incoming().keys().hasAll(['candidate', 'sender', 'createdAt']) &&
+          incoming().candidate is string && incoming().candidate.size() <= 4096 &&
+          incoming().sender in ['admin', 'device'] &&
+          incoming().createdAt is number;
+
+        allow update: if false;
+        allow delete: if isAdmin();
+      }
+    }
+
+    // Security Audit Logs Collection
+    match /securityAuditLogs/{logId} {
+      allow get: if isAdmin();
+      allow list: if isAdmin();
+      allow create: if isValidId(logId) &&
+        incoming().keys().hasAll(['eventType', 'timestamp']) &&
+        incoming().eventType in [
+          'PAIRING_TOKEN_GENERATED', 'PAIRING_TOKEN_REDEEMED', 'PAIRING_TOKEN_CANCELLED',
+          'DEVICE_REGISTERED', 'DEVICE_REVOKED', 'SESSION_REQUESTED', 'SESSION_CONNECTED',
+          'SESSION_DISCONNECTED_BY_ADMIN', 'SESSION_DISCONNECTED_BY_DEVICE',
+          'UNAUTHORIZED_ACCESS_ATTEMPT'
+        ] &&
+        incoming().timestamp is number;
+      // Immutable log
+      allow update: if false;
+      allow delete: if false;
+    }
+  }
+}
