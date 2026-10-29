@@ -161,6 +161,33 @@ export async function revokeDeviceRegistration(
 }
 
 /**
+ * Permanently delete a device from Firestore (Admin action)
+ */
+export async function deleteDeviceFromFirestore(
+  adminId: string,
+  deviceId: string
+): Promise<void> {
+  const path = `devices/${deviceId}`;
+  // 1. Notify backend security endpoint
+  try {
+    await fetch('/api/admin/revoke-device', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ deviceId, adminId }),
+    });
+  } catch (err) {
+    console.warn('Backend revocation error:', err);
+  }
+
+  // 2. Delete document from Firestore
+  try {
+    await deleteDoc(doc(db, 'devices', deviceId));
+  } catch (err) {
+    handleFirestoreError(err, OperationType.DELETE, path);
+  }
+}
+
+/**
  * Listen to past session history for an admin
  */
 export function listenToSessionHistory(

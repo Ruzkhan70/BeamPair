@@ -95,26 +95,85 @@ export class WebRTCManager {
     }
   }
 
-  // Camera capture with front or rear facing support
-  async startCamera(facingMode: 'user' | 'environment' = 'environment'): Promise<MediaStreamTrack> {
+  private wakeLock: any = null;
+
+  // Enumerate all available camera lenses on the device (wide, ultra-wide, telephoto, front)
+  static async getAvailableCameras(): Promise<MediaDeviceInfo[]> {
+    try {
+      if (!navigator.mediaDevices?.enumerateDevices) return [];
+      const devices = await navigator.mediaDevices.enumerateDevices();
+      return devices.filter((d) => d.kind === 'videoinput');
+    } catch {
+      return [];
+    }
+  }
+
+  // Request screen wake lock so the Android phone screen doesn't turn off during support
+  async requestWakeLock(): Promise<void> {
+    try {
+      if ('wakeLock' in navigator && (navigator as any).wakeLock) {
+        this.wakeLock = await (navigator as any).wakeLock.request('screen');
+      }
+    } catch (err) {
+      console.warn('WakeLock note:', err);
+    }
+  }
+
+  releaseWakeLock(): void {
+    if (this.wakeLock) {
+      try {
+        this.wakeLock.release();
+      } catch {}
+      this.wakeLock = null;
+    }
+  }
+
+  // Camera capture with front or rear facing support & Android-resilient fallback
+  async startCamera(
+    facingMode: 'user' | 'environment' = 'environment',
+    specificDeviceId?: string
+  ): Promise<MediaStreamTrack> {
     // Stop any existing video tracks first
     this.localStream.getVideoTracks().forEach((track) => {
       track.stop();
       this.localStream.removeTrack(track);
     });
 
-    const stream = await navigator.mediaDevices.getUserMedia({
-      video: {
-        facingMode: { ideal: facingMode },
-        width: { ideal: 1280 },
-        height: { ideal: 720 },
-      },
+    let stream: MediaStream | null = null;
+
+    // Constraint strategy 1: Preferred facing or specific camera ID with 720p
+    const constraintsPrimary: MediaStreamConstraints = {
+      video: specificDeviceId
+        ? { deviceId: { exact: specificDeviceId } }
+        : {
+            facingMode: { ideal: facingMode },
+            width: { ideal: 1280 },
+            height: { ideal: 720 },
+          },
       audio: false,
-    });
+    };
+
+    try {
+      stream = await navigator.mediaDevices.getUserMedia(constraintsPrimary);
+    } catch (primaryErr) {
+      console.warn('Primary camera constraint failed, attempting basic fallback for Android compatibility:', primaryErr);
+      // Constraint strategy 2: Relaxed fallback for legacy Android devices
+      const fallbackConstraints: MediaStreamConstraints = {
+        video: specificDeviceId
+          ? { deviceId: { exact: specificDeviceId } }
+          : { facingMode: { ideal: facingMode } },
+        audio: false,
+      };
+      stream = await navigator.mediaDevices.getUserMedia(fallbackConstraints);
+    }
 
     const videoTrack = stream.getVideoTracks()[0];
     this.localStream.addTrack(videoTrack);
     this.replaceOrAddTrack(videoTrack);
+
+    // Keep screen active on phone
+    await this.requestWakeLock();
+
     return videoTrack;
   }
 
@@ -259,6 +318,7 @@ export class WebRTCManager {
       this.peerConnection = null;
     }
 
+    this.releaseWakeLock();
     this.pendingRemoteCandidates = [];
     this.isRemoteDescriptionSet = false;
   }

@@ -13,12 +13,17 @@ export default function App() {
   const [initialPairToken, setInitialPairToken] = useState<string>('');
   const [signInError, setSignInError] = useState<string | null>(null);
 
-  // Check URL query parameters for pairing token on boot
+  // Check URL query parameters for pairing token or detect mobile device
   useEffect(() => {
     const urlParams = new URLSearchParams(window.location.search);
     const pairParam = urlParams.get('pair');
+    const isMobilePhone = /Android|webOS|iPhone|iPad|iPod|BlackBerry|IEMobile|Opera Mini/i.test(navigator.userAgent);
+
     if (pairParam) {
       setInitialPairToken(pairParam);
+      setCurrentView('secondary');
+    } else if (isMobilePhone) {
+      // Any physical phone defaults to Secondary Phone pairing view
       setCurrentView('secondary');
     }
   }, []);

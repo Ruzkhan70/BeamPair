@@ -1,4 +1,4 @@
-import React, { useEffect, useState } from 'react';
+import React, { useEffect, useState, useCallback } from 'react';
 import QRCode from 'qrcode';
 import {
   QrCode,
@@ -10,9 +10,11 @@ import {
   Smartphone,
   AlertCircle,
   RefreshCw,
-  ExternalLink,
+  Globe,
+  Radio,
 } from 'lucide-react';
 import { recordSecurityAudit } from '../services/signaling';
+import { generatePairingToken } from '../services/pairingService';
 
 interface PairingModalProps {
   adminId: string;
@@ -39,38 +41,23 @@ export const PairingModal: React.FC<PairingModalProps> = ({
   const [copiedLink, setCopiedLink] = useState<boolean>(false);
   const [copiedToken, setCopiedToken] = useState<boolean>(false);
 
-  const pairingUrl = token ? `${window.location.origin}/?pair=${token}` : '';
+  // External physical phone origin vs current origin
+  // In AI Studio, 'ais-pre-' is the publicly accessible shared URL reachable by any external Android phone on 4G/5G/Wi-Fi without developer authentication cookies.
+  const publicSharedOrigin =
+    typeof window !== 'undefined' && window.location.origin.includes('ais-dev-')
+      ? window.location.origin.replace('ais-dev-', 'ais-pre-')
+      : typeof window !== 'undefined'
+      ? window.location.origin
+      : '';
 
-  // Generate pairing token from backend API
-  const generateToken = async () => {
-    setLoading(true);
-    setError(null);
-    setQrSvg('');
-    setQrPngUrl('');
+  const [usePublicOrigin, setUsePublicOrigin] = useState<boolean>(true);
+  const selectedBaseOrigin = usePublicOrigin ? publicSharedOrigin : window.location.origin;
+  const pairingUrl = token ? `${selectedBaseOrigin}/?pair=${token}` : '';
 
-    const effectiveAdminEmail = adminEmail || 'ruzkhanhazar@gmail.com';
-    const effectiveAdminId = adminId || 'admin_primary_bootstrapped';
-
+  // Render QR Code from a target URL
+  const renderQrCode = useCallback(async (targetUrl: string) => {
+    if (!targetUrl) return;
     try {
-      const res = await fetch('/api/pairing/generate', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ adminId: effectiveAdminId, adminEmail: effectiveAdminEmail }),
-      });
-
-      if (!res.ok) {
-        throw new Error('Failed to generate pairing token');
-      }
-
-      const data = await res.json();
-      setToken(data.token);
-      setExpiresAt(data.expiresAt);
-      const remaining = Math.max(0, Math.floor((data.expiresAt - Date.now()) / 1000));
-      setTimeLeftSeconds(remaining);
-
-      const targetUrl = `${window.location.origin}/?pair=${data.token}`;
-
-      // 1. Generate pure SVG vector representation (immune to canvas context bugs)
       const svgOutput = await QRCode.toString(targetUrl, {
         type: 'svg',
         margin: 1,
@@ -82,7 +69,6 @@ export const PairingModal: React.FC<PairingModalProps> = ({
       });
       setQrSvg(svgOutput);
 
-      // 2. Generate PNG Data URL as secondary fallback
       const pngOutput = await QRCode.toDataURL(targetUrl, {
         width: 320,
         margin: 1,
@@ -93,17 +79,48 @@ export const PairingModal: React.FC<PairingModalProps> = ({
         errorCorrectionLevel: 'M',
       });
       setQrPngUrl(pngOutput);
+    } catch (qrErr) {
+      console.error('Failed to render QR Code:', qrErr);
+    }
+  }, []);
 
-      // Record security audit event
-      await recordSecurityAudit({
+  // Generate pairing token from backend API
+  const generateToken = async () => {
+    setLoading(true);
+    setError(null);
+
+    const effectiveAdminEmail = adminEmail || 'ruzkhanhazar@gmail.com';
+    const effectiveAdminId = adminId || 'admin_primary_bootstrapped';
+
+    // Safety timeout: guaranteed that loading never gets stuck
+    const safetyTimer = setTimeout(() => {
+      setLoading(false);
+    }, 3500);
+
+    try {
+      const data = await generatePairingToken(effectiveAdminId, effectiveAdminEmail);
+      setToken(data.token);
+      setExpiresAt(data.expiresAt);
+      const remaining = Math.max(0, Math.floor((data.expiresAt - Date.now()) / 1000));
+      setTimeLeftSeconds(remaining);
+
+      const targetUrl = `${selectedBaseOrigin}/?pair=${data.token}`;
+      await renderQrCode(targetUrl);
+
+      // Stop spinner immediately as QR code is ready
+      clearTimeout(safetyTimer);
+      setLoading(false);
+
+      // Record security audit event in background without blocking UI render
+      recordSecurityAudit({
         adminId: effectiveAdminId,
         eventType: 'PAIRING_TOKEN_GENERATED',
         details: `Generated pairing token ${data.token.substring(0, 8)}... with 5-minute TTL`,
-      });
+      }).catch((auditErr) => console.warn('Background audit note:', auditErr));
     } catch (err: unknown) {
+      clearTimeout(safetyTimer);
       console.error('Error generating pairing code:', err);
       setError(err instanceof Error ? err.message : 'Error generating pairing token');
-    } finally {
       setLoading(false);
     }
   };
@@ -113,6 +130,14 @@ export const PairingModal: React.FC<PairingModalProps> = ({
       generateToken();
     }
   }, [isOpen]);
+
+  // Re-render QR code whenever user toggles between public shared link and local origin
+  useEffect(() => {
+    if (token) {
+      const targetUrl = `${selectedBaseOrigin}/?pair=${token}`;
+      renderQrCode(targetUrl);
+    }
+  }, [selectedBaseOrigin, token, renderQrCode]);
 
   // Countdown timer
   useEffect(() => {
@@ -156,8 +181,8 @@ export const PairingModal: React.FC<PairingModalProps> = ({
   const progressPercent = Math.min(100, (timeLeftSeconds / 300) * 100);
 
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/80 backdrop-blur-sm animate-fade-in">
-      <div className="bg-slate-900 border border-slate-700/80 rounded-2xl w-full max-w-lg shadow-2xl overflow-hidden flex flex-col max-h-[92vh]">
+    <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/85 backdrop-blur-sm animate-fade-in">
+      <div className="bg-slate-900 border border-slate-700/80 rounded-2xl w-full max-w-lg shadow-2xl overflow-hidden flex flex-col max-h-[95vh]">
         {/* Header */}
         <div className="flex items-center justify-between px-6 py-4 border-b border-slate-800 bg-slate-950/60">
           <div className="flex items-center space-x-3">
@@ -165,8 +190,13 @@ export const PairingModal: React.FC<PairingModalProps> = ({
               <QrCode className="w-5 h-5" />
             </div>
             <div>
-              <h3 className="text-base font-semibold text-white">Device Pairing QR Code</h3>
-              <p className="text-xs text-slate-400">Scan with secondary Android phone camera</p>
+              <div className="flex items-center space-x-2">
+                <h3 className="text-base font-semibold text-white">Pair Any Android Phone</h3>
+                <span className="px-2 py-0.5 bg-emerald-500/15 border border-emerald-500/30 text-emerald-300 text-[10px] font-mono rounded-full font-semibold">
+                  UNIVERSAL ANDROID
+                </span>
+              </div>
+              <p className="text-xs text-slate-400">Scan with Google Lens, Samsung Camera, or any QR app</p>
             </div>
           </div>
           <button
@@ -179,12 +209,46 @@ export const PairingModal: React.FC<PairingModalProps> = ({
 
         {/* Content */}
         <div className="p-6 flex flex-col items-center overflow-y-auto">
-          {loading ? (
-            <div className="py-20 flex flex-col items-center">
-              <div className="w-12 h-12 border-4 border-indigo-500/20 border-t-indigo-500 rounded-full animate-spin" />
-              <p className="mt-4 text-xs font-mono text-slate-400">Generating cryptographic pairing token...</p>
+          {/* Target Host Selector (Public Phone URL vs Local Origin) */}
+          <div className="w-full mb-3 p-1.5 bg-slate-950/80 border border-slate-800 rounded-xl flex items-center justify-between text-xs">
+            <span className="text-slate-400 text-[11px] pl-2 flex items-center">
+              <Globe className="w-3.5 h-3.5 mr-1 text-indigo-400" />
+              Target Network:
+            </span>
+            <div className="flex space-x-1">
+              <button
+                type="button"
+                onClick={() => setUsePublicOrigin(true)}
+                className={`px-2.5 py-1 rounded-lg text-[11px] font-semibold transition cursor-pointer ${
+                  usePublicOrigin
+                    ? 'bg-indigo-600 text-white shadow-xs'
+                    : 'text-slate-400 hover:text-slate-200'
+                }`}
+                title="Public Shared URL scannable by any external phone on cellular/Wi-Fi"
+              >
+                Public Shared URL (Phone)
+              </button>
+              <button
+                type="button"
+                onClick={() => setUsePublicOrigin(false)}
+                className={`px-2.5 py-1 rounded-lg text-[11px] font-semibold transition cursor-pointer ${
+                  !usePublicOrigin
+                    ? 'bg-indigo-600 text-white shadow-xs'
+                    : 'text-slate-400 hover:text-slate-200'
+                }`}
+                title="Local / Preview origin"
+              >
+                Current Host
+              </button>
             </div>
-          ) : error ? (
+          </div>
+
+          {loading && !token ? (
+            <div className="py-16 flex flex-col items-center">
+              <div className="w-10 h-10 border-4 border-indigo-500/20 border-t-indigo-500 rounded-full animate-spin" />
+              <p className="mt-3 text-xs font-mono text-slate-400">Generating cryptographic pairing token...</p>
+            </div>
+          ) : error && !token ? (
             <div className="p-6 text-center">
               <AlertCircle className="w-10 h-10 text-rose-400 mx-auto mb-3" />
               <p className="text-sm text-rose-300 mb-4">{error}</p>
@@ -257,7 +321,7 @@ export const PairingModal: React.FC<PairingModalProps> = ({
               {/* Monospace Pairing Token Box */}
               <div className="w-full mt-3 p-3 bg-slate-950/80 border border-slate-800 rounded-xl flex items-center justify-between">
                 <div className="overflow-hidden mr-2">
-                  <span className="text-[10px] text-slate-500 uppercase tracking-wider block">Pairing Token</span>
+                  <span className="text-[10px] text-slate-500 uppercase tracking-wider block">Pairing Token (48-char hex)</span>
                   <span className="font-mono text-xs text-indigo-300 font-semibold truncate block select-all">
                     {token}
                   </span>
@@ -276,7 +340,7 @@ export const PairingModal: React.FC<PairingModalProps> = ({
               <div className="w-full mt-3 p-2.5 bg-slate-800/60 border border-slate-700/60 rounded-xl flex items-start space-x-2">
                 <ShieldCheck className="w-4 h-4 text-emerald-400 shrink-0 mt-0.5" />
                 <p className="text-[11px] text-slate-300 leading-relaxed">
-                  Single-use cryptographic token bound to administrator <span className="text-emerald-400 font-medium">{adminEmail || 'ruzkhanhazar@gmail.com'}</span>.
+                  Single-use cryptographic token bound to administrator <span className="text-emerald-400 font-medium">{adminEmail || 'ruzkhanhazar@gmail.com'}</span>. Compatible with any Android smartphone (Samsung, Pixel, Xiaomi, OnePlus, Motorola, etc.).
                 </p>
               </div>
 
@@ -294,7 +358,7 @@ export const PairingModal: React.FC<PairingModalProps> = ({
                   title="Copy Pairing URL"
                 >
                   {copiedLink ? <Check className="w-3.5 h-3.5 text-emerald-400" /> : <Copy className="w-3.5 h-3.5" />}
-                  <span>{copiedLink ? 'Copied Link' : 'Copy Link'}</span>
+                  <span>{copiedLink ? 'Copied' : 'Copy Link'}</span>
                 </button>
               </div>
 

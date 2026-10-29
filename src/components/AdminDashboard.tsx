@@ -19,18 +19,22 @@ import {
   Mic,
   Monitor,
   Search,
+  X,
+  Loader2,
 } from 'lucide-react';
 import { Device, Session, SecurityAuditLog } from '../types';
 import { auth } from '../firebase/config';
 import {
   listenToAdminDevices,
   revokeDeviceRegistration,
+  deleteDeviceFromFirestore,
   listenToSessionHistory,
   listenToSecurityLogs,
 } from '../services/deviceService';
 import { PairingModal } from './PairingModal';
 import { StartSessionModal } from './StartSessionModal';
 import { AdminLiveStreamModal } from './AdminLiveStreamModal';
+import { fetchIceServers } from '../services/webrtc';
 
 interface AdminDashboardProps {
   adminId: string;
@@ -77,9 +81,8 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
     });
 
     // Fetch ICE servers for settings tab
-    fetch('/api/webrtc/ice-servers')
-      .then((res) => res.json())
-      .then((data) => setIceServers(data.iceServers || []))
+    fetchIceServers()
+      .then((servers) => setIceServers(servers))
       .catch(console.warn);
 
     return () => {
@@ -89,14 +92,35 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
     };
   }, [adminId]);
 
-  // Handle Revoke Device
-  const handleRevokeDevice = async (device: Device) => {
-    if (confirm(`Are you sure you want to revoke pairing for "${device.deviceName}"? This phone will immediately lose remote access.`)) {
-      try {
-        await revokeDeviceRegistration(adminId, device.deviceId);
-      } catch (err) {
-        console.error('Revoke error:', err);
-      }
+  // Modal state for device revoke/delete confirmation
+  const [deviceToManage, setDeviceToManage] = useState<Device | null>(null);
+  const [manageLoading, setManageLoading] = useState<boolean>(false);
+
+  // Handle Revoke Device Access
+  const handleRevokeConfirm = async () => {
+    if (!deviceToManage) return;
+    setManageLoading(true);
+    try {
+      await revokeDeviceRegistration(adminId, deviceToManage.deviceId);
+      setDeviceToManage(null);
+    } catch (err) {
+      console.error('Revoke error:', err);
+    } finally {
+      setManageLoading(false);
+    }
+  };
+
+  // Handle Delete Device Permanently from Dashboard
+  const handleDeleteConfirm = async () => {
+    if (!deviceToManage) return;
+    setManageLoading(true);
+    try {
+      await deleteDeviceFromFirestore(adminId, deviceToManage.deviceId);
+      setDeviceToManage(null);
+    } catch (err) {
+      console.error('Delete error:', err);
+    } finally {
+      setManageLoading(false);
     }
   };
 
@@ -333,9 +357,9 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
                         <span>Start Session</span>
                       </button>
                       <button
-                        onClick={() => handleRevokeDevice(device)}
-                        className="px-2.5 py-2 bg-slate-800 hover:bg-rose-950/40 border border-slate-700/60 hover:border-rose-800/50 text-slate-400 hover:text-rose-400 text-xs rounded-xl transition"
-                        title="Revoke Device Access"
+                        onClick={() => setDeviceToManage(device)}
+                        className="px-2.5 py-2 bg-slate-800 hover:bg-rose-950/40 border border-slate-700/60 hover:border-rose-800/50 text-slate-400 hover:text-rose-400 text-xs rounded-xl transition cursor-pointer"
+                        title="Revoke or Delete Device"
                       >
                         <Trash2 className="w-3.5 h-3.5" />
                       </button>
@@ -515,6 +539,99 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
           adminId={adminId}
           onClose={() => setActiveLiveSession(null)}
         />
+      )}
+
+      {/* Revoke / Delete Device Confirmation Modal */}
+      {deviceToManage && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/80 backdrop-blur-sm animate-fade-in">
+          <div className="bg-slate-900 border border-slate-700 rounded-2xl w-full max-w-md shadow-2xl overflow-hidden flex flex-col">
+            {/* Modal Header */}
+            <div className="flex items-center justify-between px-6 py-4 border-b border-slate-800 bg-slate-950/60">
+              <div className="flex items-center space-x-3">
+                <div className="p-2 bg-rose-500/10 border border-rose-500/20 text-rose-400 rounded-xl">
+                  <Trash2 className="w-5 h-5" />
+                </div>
+                <div>
+                  <h3 className="text-sm font-bold text-white">Manage Device Access</h3>
+                  <p className="text-xs text-slate-400">Revoke pairing or remove device</p>
+                </div>
+              </div>
+              <button
+                onClick={() => setDeviceToManage(null)}
+                disabled={manageLoading}
+                className="p-1.5 text-slate-400 hover:text-white hover:bg-slate-800 rounded-lg transition cursor-pointer"
+              >
+                <X className="w-5 h-5" />
+              </button>
+            </div>
+
+            {/* Modal Body */}
+            <div className="p-6 space-y-4">
+              <div className="p-3.5 bg-slate-950/70 border border-slate-800 rounded-xl space-y-1.5">
+                <div className="flex items-center justify-between">
+                  <span className="text-xs font-bold text-white">{deviceToManage.deviceName}</span>
+                  <span className={`text-[10px] font-semibold px-2 py-0.5 rounded-full ${
+                    deviceToManage.isRevoked
+                      ? 'bg-rose-500/15 text-rose-400 border border-rose-500/20'
+                      : deviceToManage.status === 'online'
+                      ? 'bg-emerald-500/15 text-emerald-400 border border-emerald-500/20'
+                      : 'bg-slate-800 text-slate-400'
+                  }`}>
+                    {deviceToManage.isRevoked ? 'REVOKED' : deviceToManage.status.toUpperCase()}
+                  </span>
+                </div>
+                <p className="text-[11px] font-mono text-slate-400">ID: {deviceToManage.deviceId}</p>
+                <p className="text-[11px] text-slate-500">Platform: {deviceToManage.platform.toUpperCase()}</p>
+              </div>
+
+              <p className="text-xs text-slate-300 leading-relaxed">
+                Choose an action for this device. <strong>Revoking</strong> disconnects any ongoing session and blocks future connection requests. <strong>Deleting</strong> completely erases the device record from your dashboard.
+              </p>
+
+              <div className="space-y-2 pt-2">
+                {!deviceToManage.isRevoked && (
+                  <button
+                    onClick={handleRevokeConfirm}
+                    disabled={manageLoading}
+                    className="w-full py-2.5 bg-amber-600/90 hover:bg-amber-600 disabled:opacity-50 text-white text-xs font-semibold rounded-xl flex items-center justify-center space-x-2 transition cursor-pointer shadow-md shadow-amber-600/20"
+                  >
+                    {manageLoading ? (
+                      <Loader2 className="w-4 h-4 animate-spin" />
+                    ) : (
+                      <>
+                        <Shield className="w-4 h-4" />
+                        <span>Revoke Device Access (Block Future Sessions)</span>
+                      </>
+                    )}
+                  </button>
+                )}
+
+                <button
+                  onClick={handleDeleteConfirm}
+                  disabled={manageLoading}
+                  className="w-full py-2.5 bg-rose-600 hover:bg-rose-500 disabled:opacity-50 text-white text-xs font-semibold rounded-xl flex items-center justify-center space-x-2 transition cursor-pointer shadow-md shadow-rose-600/20"
+                >
+                  {manageLoading ? (
+                    <Loader2 className="w-4 h-4 animate-spin" />
+                  ) : (
+                    <>
+                      <Trash2 className="w-4 h-4" />
+                      <span>Delete Device Permanently from Dashboard</span>
+                    </>
+                  )}
+                </button>
+
+                <button
+                  onClick={() => setDeviceToManage(null)}
+                  disabled={manageLoading}
+                  className="w-full py-2 bg-slate-800 hover:bg-slate-700 text-slate-300 text-xs font-medium rounded-xl transition cursor-pointer"
+                >
+                  Cancel
+                </button>
+              </div>
+            </div>
+          </div>
+        </div>
       )}
     </div>
   );

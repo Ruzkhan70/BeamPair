@@ -35,6 +35,7 @@ import {
   terminateSession,
   recordSecurityAudit,
 } from '../services/signaling';
+import { validatePairingToken, redeemPairingToken } from '../services/pairingService';
 
 interface SecondaryDeviceViewProps {
   initialToken?: string;
@@ -95,14 +96,28 @@ export const SecondaryDeviceView: React.FC<SecondaryDeviceViewProps> = ({
   useEffect(() => {
     setScreenSupported(typeof navigator.mediaDevices?.getDisplayMedia === 'function');
 
-    // Auto-populate device name based on user agent
+    // Auto-populate device name based on Android device brand and user agent
     const ua = navigator.userAgent;
-    if (/Android/i.test(ua)) {
+    if (/Samsung|SM-|Galaxy/i.test(ua)) {
+      setCustomDeviceName('Samsung Galaxy Phone');
+    } else if (/Pixel/i.test(ua)) {
+      setCustomDeviceName('Google Pixel Phone');
+    } else if (/Xiaomi|Redmi|POCO/i.test(ua)) {
+      setCustomDeviceName('Xiaomi / Redmi Phone');
+    } else if (/OnePlus/i.test(ua)) {
+      setCustomDeviceName('OnePlus Phone');
+    } else if (/Moto|Motorola/i.test(ua)) {
+      setCustomDeviceName('Motorola Phone');
+    } else if (/Oppo|Realme/i.test(ua)) {
+      setCustomDeviceName('Oppo / Realme Phone');
+    } else if (/Vivo|iQOO/i.test(ua)) {
+      setCustomDeviceName('Vivo Phone');
+    } else if (/Android/i.test(ua)) {
       setCustomDeviceName('Android Smartphone');
     } else if (/iPhone|iPad/i.test(ua)) {
       setCustomDeviceName('Apple iOS Device');
     } else {
-      setCustomDeviceName('Remote Support Client');
+      setCustomDeviceName('Android Support Client');
     }
 
     // Check permissions if supported
@@ -190,16 +205,7 @@ export const SecondaryDeviceView: React.FC<SecondaryDeviceViewProps> = ({
     setValidationLoading(true);
     setValidationError(null);
     try {
-      const res = await fetch('/api/pairing/validate', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ token: cleanToken }),
-      });
-
-      const data = await res.json();
-      if (!res.ok) {
-        throw new Error(data.error || 'Pairing token validation failed');
-      }
+      const data = await validatePairingToken(cleanToken);
 
       setValidatedAdminInfo({
         adminEmail: data.adminEmail,
@@ -225,23 +231,14 @@ export const SecondaryDeviceView: React.FC<SecondaryDeviceViewProps> = ({
     const platform = /Android/i.test(navigator.userAgent) ? 'android' : 'other';
 
     try {
-      // 1. Redeem token atomically on trusted backend
-      const res = await fetch('/api/pairing/redeem', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          token: validatedAdminInfo.token,
-          deviceId,
-          deviceName: customDeviceName,
-          deviceModel: navigator.userAgent.slice(0, 80),
-          platform,
-        }),
+      // 1. Redeem token atomically (tries backend first, falls back to direct Firestore)
+      await redeemPairingToken({
+        token: validatedAdminInfo.token,
+        deviceId,
+        deviceName: customDeviceName,
+        deviceModel: navigator.userAgent.slice(0, 80),
+        platform,
       });
-
-      const redeemData = await res.json();
-      if (!res.ok) {
-        throw new Error(redeemData.error || 'Redemption failed');
-      }
 
       // 2. Register device record in Firestore
       const newDevice: Device = {
@@ -317,7 +314,7 @@ export const SecondaryDeviceView: React.FC<SecondaryDeviceViewProps> = ({
     // Listen to changes on our device document (e.g. if admin revokes us or initiates a session)
     const unsubDevice = listenToDevice(device.deviceId, (remoteDevice) => {
       if (!remoteDevice || remoteDevice.isRevoked) {
-        alert('This device registration has been revoked by the administrator.');
+        setPermissionNotice('This device registration has been revoked by the administrator.');
         unpairDevice();
         return;
       }
