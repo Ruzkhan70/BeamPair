@@ -17,13 +17,14 @@ export default function App() {
   useEffect(() => {
     const urlParams = new URLSearchParams(window.location.search);
     const pairParam = urlParams.get('pair');
+    const roleParam = urlParams.get('role');
     const isMobilePhone = /Android|webOS|iPhone|iPad|iPod|BlackBerry|IEMobile|Opera Mini/i.test(navigator.userAgent);
 
     if (pairParam) {
       setInitialPairToken(pairParam);
       setCurrentView('secondary');
-    } else if (isMobilePhone) {
-      // Any physical phone defaults to Secondary Phone pairing view
+    } else if (roleParam === 'phone' || roleParam === 'secondary' || isMobilePhone) {
+      // Any physical phone or phone role link defaults to Secondary Phone pairing view
       setCurrentView('secondary');
     }
   }, []);

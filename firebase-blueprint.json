@@ -213,6 +213,14 @@
           "type": "string",
           "maxLength": 200,
           "description": "Reason given for session disconnect."
+        },
+        "liveFrame": {
+          "type": "string",
+          "description": "Base64 encoded JPEG fallback camera frame."
+        },
+        "lastFrameAt": {
+          "type": "number",
+          "description": "Timestamp of last live frame update."
         }
       },
       "required": ["sessionId", "adminId", "deviceId", "status", "startedAt"]

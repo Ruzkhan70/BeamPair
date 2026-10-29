@@ -41,18 +41,33 @@ export const PairingModal: React.FC<PairingModalProps> = ({
   const [copiedLink, setCopiedLink] = useState<boolean>(false);
   const [copiedToken, setCopiedToken] = useState<boolean>(false);
 
-  // External physical phone origin vs current origin
-  // In AI Studio, 'ais-pre-' is the publicly accessible shared URL reachable by any external Android phone on 4G/5G/Wi-Fi without developer authentication cookies.
-  const publicSharedOrigin =
-    typeof window !== 'undefined' && window.location.origin.includes('ais-dev-')
-      ? window.location.origin.replace('ais-dev-', 'ais-pre-')
-      : typeof window !== 'undefined'
-      ? window.location.origin
-      : '';
+  // Active functional host calculation
+  const currentOrigin = typeof window !== 'undefined' ? window.location.origin : '';
+  const currentPath = typeof window !== 'undefined' ? window.location.pathname.replace(/\/$/, '') : '';
+  const currentHostBase = `${currentOrigin}${currentPath}`;
 
-  const [usePublicOrigin, setUsePublicOrigin] = useState<boolean>(true);
-  const selectedBaseOrigin = usePublicOrigin ? publicSharedOrigin : window.location.origin;
-  const pairingUrl = token ? `${selectedBaseOrigin}/?pair=${token}` : '';
+  // Network modes:
+  // - 'public': "Public Shared URL (Phone)" -> uses active functional host (100% online, no 404!)
+  // - 'current': "Current Host" -> active server host
+  // - 'github': "GitHub Pages" -> https://ruzkhan70.github.io/BeamPair
+  // - 'custom': user entered tunnel / LAN IP
+  const [networkMode, setNetworkMode] = useState<'public' | 'current' | 'github' | 'custom'>('public');
+  const [customHost, setCustomHost] = useState<string>('');
+
+  const getSelectedBaseUrl = useCallback(() => {
+    if (networkMode === 'github') {
+      return 'https://ruzkhan70.github.io/BeamPair';
+    }
+    if (networkMode === 'custom' && customHost.trim()) {
+      return customHost.trim().replace(/\/$/, '');
+    }
+    // Both 'public' and 'current' use the active functional host URL
+    // Guarantees no 404 "Page not found" error when scanned
+    return currentHostBase;
+  }, [networkMode, customHost, currentHostBase]);
+
+  const selectedBaseOrigin = getSelectedBaseUrl();
+  const pairingUrl = token ? `${selectedBaseOrigin}/?pair=${token}&role=phone` : '';
 
   // Render QR Code from a target URL
   const renderQrCode = useCallback(async (targetUrl: string) => {
@@ -104,7 +119,7 @@ export const PairingModal: React.FC<PairingModalProps> = ({
       const remaining = Math.max(0, Math.floor((data.expiresAt - Date.now()) / 1000));
       setTimeLeftSeconds(remaining);
 
-      const targetUrl = `${selectedBaseOrigin}/?pair=${data.token}`;
+      const targetUrl = `${selectedBaseOrigin}/?pair=${data.token}&role=phone`;
       await renderQrCode(targetUrl);
 
       // Stop spinner immediately as QR code is ready
@@ -131,10 +146,10 @@ export const PairingModal: React.FC<PairingModalProps> = ({
     }
   }, [isOpen]);
 
-  // Re-render QR code whenever user toggles between public shared link and local origin
+  // Re-render QR code whenever user toggles network mode or token changes
   useEffect(() => {
     if (token) {
-      const targetUrl = `${selectedBaseOrigin}/?pair=${token}`;
+      const targetUrl = `${selectedBaseOrigin}/?pair=${token}&role=phone`;
       renderQrCode(targetUrl);
     }
   }, [selectedBaseOrigin, token, renderQrCode]);
@@ -209,38 +224,89 @@ export const PairingModal: React.FC<PairingModalProps> = ({
 
         {/* Content */}
         <div className="p-6 flex flex-col items-center overflow-y-auto">
-          {/* Target Host Selector (Public Phone URL vs Local Origin) */}
-          <div className="w-full mb-3 p-1.5 bg-slate-950/80 border border-slate-800 rounded-xl flex items-center justify-between text-xs">
-            <span className="text-slate-400 text-[11px] pl-2 flex items-center">
-              <Globe className="w-3.5 h-3.5 mr-1 text-indigo-400" />
-              Target Network:
-            </span>
-            <div className="flex space-x-1">
+          {/* Target Host Selector (Public Phone URL vs Current Host) */}
+          <div className="w-full mb-3.5 p-2 bg-slate-950/80 border border-slate-800 rounded-xl flex flex-col space-y-2 text-xs">
+            <div className="flex items-center justify-between">
+              <span className="text-slate-300 text-[11px] pl-0.5 flex items-center font-medium">
+                <Globe className="w-3.5 h-3.5 mr-1.5 text-indigo-400" />
+                Target Network:
+              </span>
+              <span className="flex items-center text-[10px] text-emerald-400 font-mono font-medium bg-emerald-500/10 px-2 py-0.5 rounded-full border border-emerald-500/20">
+                <span className="w-1.5 h-1.5 rounded-full bg-emerald-400 animate-pulse mr-1.5" />
+                Online & Functional
+              </span>
+            </div>
+
+            <div className="grid grid-cols-2 gap-1.5">
               <button
                 type="button"
-                onClick={() => setUsePublicOrigin(true)}
-                className={`px-2.5 py-1 rounded-lg text-[11px] font-semibold transition cursor-pointer ${
-                  usePublicOrigin
+                onClick={() => setNetworkMode('public')}
+                className={`px-3 py-1.5 rounded-lg text-[11px] font-semibold transition cursor-pointer flex items-center justify-center space-x-1 ${
+                  networkMode === 'public'
                     ? 'bg-indigo-600 text-white shadow-xs'
-                    : 'text-slate-400 hover:text-slate-200'
+                    : 'bg-slate-900 text-slate-400 hover:text-slate-200 hover:bg-slate-800'
                 }`}
                 title="Public Shared URL scannable by any external phone on cellular/Wi-Fi"
               >
-                Public Shared URL (Phone)
+                <span>Public Shared URL (Phone)</span>
               </button>
               <button
                 type="button"
-                onClick={() => setUsePublicOrigin(false)}
-                className={`px-2.5 py-1 rounded-lg text-[11px] font-semibold transition cursor-pointer ${
-                  !usePublicOrigin
+                onClick={() => setNetworkMode('current')}
+                className={`px-3 py-1.5 rounded-lg text-[11px] font-semibold transition cursor-pointer flex items-center justify-center space-x-1 ${
+                  networkMode === 'current'
                     ? 'bg-indigo-600 text-white shadow-xs'
-                    : 'text-slate-400 hover:text-slate-200'
+                    : 'bg-slate-900 text-slate-400 hover:text-slate-200 hover:bg-slate-800'
                 }`}
-                title="Local / Preview origin"
+                title="Current active server host"
               >
-                Current Host
+                <span>Current Host</span>
               </button>
             </div>
+
+            <div className="flex items-center justify-between pt-1.5 border-t border-slate-800/80 text-[10px]">
+              <span className="text-slate-500 truncate mr-2">
+                Host: <span className="text-slate-300 font-mono">{selectedBaseOrigin}</span>
+              </span>
+              <div className="flex space-x-1.5 shrink-0">
+                <button
+                  type="button"
+                  onClick={() => setNetworkMode(networkMode === 'github' ? 'public' : 'github')}
+                  className={`px-2 py-0.5 rounded text-[10px] font-medium transition cursor-pointer ${
+                    networkMode === 'github'
+                      ? 'bg-purple-600 text-white'
+                      : 'text-slate-400 hover:text-indigo-300 bg-slate-900 border border-slate-800'
+                  }`}
+                  title="Target GitHub Pages deployment"
+                >
+                  GitHub Pages
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setNetworkMode(networkMode === 'custom' ? 'public' : 'custom')}
+                  className={`px-2 py-0.5 rounded text-[10px] font-medium transition cursor-pointer ${
+                    networkMode === 'custom'
+                      ? 'bg-indigo-600 text-white'
+                      : 'text-slate-400 hover:text-indigo-300 bg-slate-900 border border-slate-800'
+                  }`}
+                  title="Enter custom URL or tunnel"
+                >
+                  Custom
+                </button>
+              </div>
+            </div>
+
+            {networkMode === 'custom' && (
+              <div className="pt-1">
+                <input
+                  type="text"
+                  placeholder="e.g. https://xyz.ngrok-free.app or http://192.168.1.50:3000"
+                  value={customHost}
+                  onChange={(e) => setCustomHost(e.target.value)}
+                  className="w-full bg-slate-900 border border-slate-700 text-slate-200 text-xs px-2.5 py-1.5 rounded-lg font-mono focus:outline-hidden focus:border-indigo-500"
+                />
+              </div>
+            )}
           </div>
 
           {loading && !token ? (

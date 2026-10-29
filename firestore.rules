@@ -145,7 +145,7 @@ service cloud.firestore {
           incoming().startedAt == existing().startedAt &&
           incoming().diff(existing()).affectedKeys().hasOnly([
             'status', 'sdpOffer', 'endedAt', 'endedBy', 'terminationReason',
-            'requestCamera', 'requestMicrophone', 'requestScreen', 'cameraFacing'
+            'requestCamera', 'requestMicrophone', 'requestScreen', 'cameraFacing', 'remoteCommand'
           ]))
         ||
         // Device actions: answer SDP, connecting/active state, end session
@@ -154,7 +154,7 @@ service cloud.firestore {
           incoming().deviceId == existing().deviceId &&
           incoming().startedAt == existing().startedAt &&
           incoming().diff(existing()).affectedKeys().hasOnly([
-            'status', 'sdpAnswer', 'endedAt', 'endedBy', 'terminationReason'
+            'status', 'sdpAnswer', 'endedAt', 'endedBy', 'terminationReason', 'remoteCommand', 'liveFrame', 'lastFrameAt'
           ]))
       );
 

@@ -42,6 +42,13 @@ export interface Session {
   endedAt?: number;
   endedBy?: 'admin' | 'device' | 'timeout' | 'error';
   terminationReason?: string;
+  remoteCommand?: {
+    action: 'switchCamera' | 'toggleTorch' | 'muteAudio' | 'pauseVideo' | string;
+    value?: any;
+    timestamp: number;
+  };
+  liveFrame?: string;
+  lastFrameAt?: number;
 }
 
 export interface IceCandidateData {

@@ -9,7 +9,6 @@ import {
   CheckCircle,
   AlertTriangle,
   RefreshCw,
-  LogOut,
   PhoneCall,
   PhoneOff,
   Video,
@@ -19,6 +18,8 @@ import {
   Check,
   ChevronRight,
   Eye,
+  Zap,
+  Wifi,
 } from 'lucide-react';
 import { Device, Session } from '../types';
 import { WebRTCManager } from '../services/webrtc';
@@ -34,6 +35,7 @@ import {
   listenToIceCandidates,
   terminateSession,
   recordSecurityAudit,
+  updateSessionLiveFrame,
 } from '../services/signaling';
 import { validatePairingToken, redeemPairingToken } from '../services/pairingService';
 
@@ -376,6 +378,48 @@ export const SecondaryDeviceView: React.FC<SecondaryDeviceViewProps> = ({
     setConnectionStatusText('Session ended: ' + reason);
   }, []);
 
+  // Continuous real-time camera frame relay for instant fallback to Admin Portal
+  useEffect(() => {
+    if (!activeSession) return;
+    let isCancelled = false;
+    const canvas = document.createElement('canvas');
+    const ctx = canvas.getContext('2d');
+
+    const interval = setInterval(() => {
+      if (isCancelled || !localVideoRef.current) return;
+      const v = localVideoRef.current;
+      if (v.readyState < 2 || v.videoWidth === 0) return;
+
+      try {
+        const maxWidth = 480;
+        const scale = Math.min(1, maxWidth / v.videoWidth);
+        canvas.width = Math.round(v.videoWidth * scale);
+        canvas.height = Math.round(v.videoHeight * scale);
+        if (ctx) {
+          ctx.drawImage(v, 0, 0, canvas.width, canvas.height);
+          const frameData = canvas.toDataURL('image/jpeg', 0.65);
+
+          // 1. Send to server frame relay (zero-latency memory buffer)
+          fetch(`/api/stream/frame/${activeSession.sessionId}`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ frame: frameData }),
+          }).catch(() => {});
+
+          // 2. Also update Firestore session doc for cross-network/static hosting fallback
+          updateSessionLiveFrame(activeSession.sessionId, frameData).catch(() => {});
+        }
+      } catch {
+        // ignore frame snapshot errors
+      }
+    }, 350);
+
+    return () => {
+      isCancelled = true;
+      clearInterval(interval);
+    };
+  }, [activeSession]);
+
   // Accept incoming support session and start authorized media capture
   const acceptSupportSession = async () => {
     if (!incomingSession || !device) return;
@@ -399,13 +443,31 @@ export const SecondaryDeviceView: React.FC<SecondaryDeviceViewProps> = ({
 
       webrtc.onConnectionStateChange = (state) => {
         setConnectionStatusText(`WebRTC: ${state}`);
-        if (state === 'failed' || state === 'closed' || state === 'disconnected') {
+        if (state === 'connected') {
+          setConnectionStatusText('WebRTC Active & Streaming');
+        } else if (state === 'failed' || state === 'closed' || state === 'disconnected') {
           console.warn('WebRTC state change:', state);
         }
       };
 
       webrtc.onScreenShareEnded = () => {
         setPermissionNotice('Screen capture stopped via browser/OS controls.');
+      };
+
+      // Handle Remote Control Commands from Admin (via DataChannel or Firestore)
+      const handleRemoteCommand = async (command: { action: string; value?: any }) => {
+        if (!command || !command.action) return;
+        if (command.action === 'switchCamera') {
+          await toggleCameraFacing();
+        } else if (command.action === 'toggleTorch') {
+          await webrtcRef.current?.toggleTorch(command.value);
+        } else if (command.action === 'muteAudio') {
+          toggleAudioMute();
+        }
+      };
+
+      webrtc.onControlCommand = (cmd) => {
+        handleRemoteCommand(cmd);
       };
 
       // 1. Capture authorized Camera
@@ -445,6 +507,7 @@ export const SecondaryDeviceView: React.FC<SecondaryDeviceViewProps> = ({
       // Show local preview in UI
       if (localVideoRef.current) {
         localVideoRef.current.srcObject = webrtc.localStream;
+        localVideoRef.current.play().catch(console.warn);
       }
 
       // Listen for ICE candidates from Admin
@@ -456,7 +519,9 @@ export const SecondaryDeviceView: React.FC<SecondaryDeviceViewProps> = ({
         }
       );
 
-      // Listen to Session document for Admin's SDP Offer
+      let lastRemoteCmdTime = 0;
+
+      // Listen to Session document for Admin's SDP Offer & remote commands
       unsubscribeSessionRef.current = listenToSession(session.sessionId, async (updatedSession) => {
         if (updatedSession.status === 'terminated') {
           handleSessionEndedLocally(updatedSession.terminationReason || 'Admin terminated session');
@@ -480,6 +545,12 @@ export const SecondaryDeviceView: React.FC<SecondaryDeviceViewProps> = ({
             console.error('Error handling SDP offer/answer:', sdpErr);
           }
         }
+
+        // Listen for Firestore fallback remote commands from Admin
+        if (updatedSession.remoteCommand && updatedSession.remoteCommand.timestamp > lastRemoteCmdTime) {
+          lastRemoteCmdTime = updatedSession.remoteCommand.timestamp;
+          handleRemoteCommand(updatedSession.remoteCommand);
+        }
       });
     } catch (err: unknown) {
       console.error('Session media initiation failed:', err);
@@ -499,6 +570,7 @@ export const SecondaryDeviceView: React.FC<SecondaryDeviceViewProps> = ({
       setActiveFacingMode(nextFacing);
       if (localVideoRef.current) {
         localVideoRef.current.srcObject = webrtcRef.current.localStream;
+        localVideoRef.current.play().catch(console.warn);
       }
     } catch (err) {
       console.error('Failed to flip camera:', err);
@@ -832,8 +904,8 @@ export const SecondaryDeviceView: React.FC<SecondaryDeviceViewProps> = ({
                 <span className="text-[11px] font-mono text-slate-400">{connectionStatusText}</span>
               </div>
 
-              {/* Local Video Preview */}
-              <div className="relative aspect-video bg-black rounded-xl overflow-hidden border border-slate-800 flex items-center justify-center">
+              {/* Local Video Preview - Phone Portrait Aspect Ratio */}
+              <div className="relative w-full max-w-[260px] aspect-[9/16] bg-black rounded-2xl overflow-hidden border-2 border-slate-700/80 shadow-inner flex items-center justify-center mx-auto">
                 <video
                   ref={localVideoRef}
                   autoPlay
@@ -843,24 +915,26 @@ export const SecondaryDeviceView: React.FC<SecondaryDeviceViewProps> = ({
                 />
                 <div className="absolute top-2 left-2 px-2 py-1 bg-black/60 backdrop-blur-xs rounded-md text-[10px] text-slate-300 flex items-center space-x-1">
                   <Eye className="w-3 h-3 text-indigo-400" />
-                  <span>Your Live Broadcast Preview</span>
+                  <span>Your Live Feed</span>
                 </div>
               </div>
 
-              {/* In-Session Controls */}
-              <div className="grid grid-cols-3 gap-2">
+              {/* In-Session Controls (Flip, Mic, Torch, Screen) */}
+              <div className="grid grid-cols-4 gap-1.5">
                 <button
+                  type="button"
                   onClick={toggleCameraFacing}
-                  className="py-2.5 bg-slate-800 hover:bg-slate-700 text-slate-200 text-xs font-medium rounded-xl flex flex-col items-center justify-center space-y-1 transition"
+                  className="py-2.5 bg-slate-800 hover:bg-slate-700 text-slate-200 text-xs font-medium rounded-xl flex flex-col items-center justify-center space-y-1 transition cursor-pointer"
                   title="Flip between front and rear camera"
                 >
                   <RefreshCw className="w-4 h-4 text-indigo-400" />
-                  <span className="text-[10px]">Flip Camera</span>
+                  <span className="text-[10px]">Flip Cam</span>
                 </button>
 
                 <button
+                  type="button"
                   onClick={toggleAudioMute}
-                  className={`py-2.5 rounded-xl text-xs font-medium flex flex-col items-center justify-center space-y-1 transition ${
+                  className={`py-2.5 rounded-xl text-xs font-medium flex flex-col items-center justify-center space-y-1 transition cursor-pointer ${
                     isMuted ? 'bg-rose-500/20 text-rose-300 border border-rose-500/30' : 'bg-slate-800 text-slate-200'
                   }`}
                 >
@@ -868,20 +942,77 @@ export const SecondaryDeviceView: React.FC<SecondaryDeviceViewProps> = ({
                   <span className="text-[10px]">{isMuted ? 'Muted' : 'Mute Mic'}</span>
                 </button>
 
-                {screenSupported && (
+                <button
+                  type="button"
+                  onClick={async () => {
+                    if (webrtcRef.current) {
+                      const cur = webrtcRef.current.getTorchState();
+                      await webrtcRef.current.toggleTorch(!cur);
+                    }
+                  }}
+                  className="py-2.5 bg-slate-800 hover:bg-slate-700 text-slate-200 text-xs font-medium rounded-xl flex flex-col items-center justify-center space-y-1 transition cursor-pointer"
+                  title="Toggle Flashlight / Torch"
+                >
+                  <Zap className="w-4 h-4 text-amber-400" />
+                  <span className="text-[10px]">Torch</span>
+                </button>
+
+                {screenSupported ? (
                   <button
+                    type="button"
                     onClick={triggerScreenShare}
-                    className="py-2.5 bg-slate-800 hover:bg-slate-700 text-slate-200 text-xs font-medium rounded-xl flex flex-col items-center justify-center space-y-1 transition"
+                    className="py-2.5 bg-slate-800 hover:bg-slate-700 text-slate-200 text-xs font-medium rounded-xl flex flex-col items-center justify-center space-y-1 transition cursor-pointer"
                   >
                     <Monitor className="w-4 h-4 text-indigo-400" />
-                    <span className="text-[10px]">Share Screen</span>
+                    <span className="text-[10px]">Screen</span>
+                  </button>
+                ) : (
+                  <button
+                    type="button"
+                    onClick={async () => {
+                      if (webrtcRef.current) {
+                        setConnectionStatusText('Reconnecting ICE...');
+                        const offer = await webrtcRef.current.restartIce();
+                        if (offer?.sdp && activeSession) {
+                          await setSessionAnswer(activeSession.sessionId, offer.sdp);
+                        }
+                      }
+                    }}
+                    className="py-2.5 bg-slate-800 hover:bg-slate-700 text-slate-200 text-xs font-medium rounded-xl flex flex-col items-center justify-center space-y-1 transition cursor-pointer"
+                    title="Reconnect ICE"
+                  >
+                    <Wifi className="w-4 h-4 text-emerald-400" />
+                    <span className="text-[10px]">Reconnect</span>
                   </button>
                 )}
               </div>
 
+              {/* If WebRTC failed, show prominent reconnect banner */}
+              {connectionStatusText.toLowerCase().includes('fail') && (
+                <div className="p-2.5 bg-rose-500/15 border border-rose-500/30 rounded-xl flex items-center justify-between text-xs text-rose-300">
+                  <span className="text-[11px]">WebRTC relay reconnecting...</span>
+                  <button
+                    type="button"
+                    onClick={async () => {
+                      if (webrtcRef.current && activeSession) {
+                        setConnectionStatusText('Retrying connection...');
+                        const offer = await webrtcRef.current.restartIce();
+                        if (offer?.sdp) {
+                          await setSessionAnswer(activeSession.sessionId, offer.sdp);
+                        }
+                      }
+                    }}
+                    className="px-2.5 py-1 bg-rose-600 hover:bg-rose-500 text-white rounded-lg text-[10px] font-semibold transition cursor-pointer"
+                  >
+                    Retry ICE Now
+                  </button>
+                </div>
+              )}
+
               <button
+                type="button"
                 onClick={endActiveSession}
-                className="w-full py-2.5 bg-rose-600 hover:bg-rose-500 text-white text-xs font-bold rounded-xl flex items-center justify-center space-x-2 transition shadow-lg shadow-rose-600/20"
+                className="w-full py-2.5 bg-rose-600 hover:bg-rose-500 text-white text-xs font-bold rounded-xl flex items-center justify-center space-x-2 transition shadow-lg shadow-rose-600/20 cursor-pointer"
               >
                 <PhoneOff className="w-4 h-4" />
                 <span>End Remote Support</span>
@@ -964,17 +1095,6 @@ export const SecondaryDeviceView: React.FC<SecondaryDeviceViewProps> = ({
                 {permissionNotice}
               </div>
             )}
-
-            {/* Unpair action */}
-            <div className="pt-2">
-              <button
-                onClick={unpairDevice}
-                className="w-full py-2 bg-slate-950 hover:bg-rose-950/30 border border-slate-800 hover:border-rose-800/50 text-slate-400 hover:text-rose-400 text-xs font-medium rounded-xl flex items-center justify-center space-x-1.5 transition"
-              >
-                <LogOut className="w-3.5 h-3.5" />
-                <span>Unpair This Device</span>
-              </button>
-            </div>
           </div>
         </div>
       )}

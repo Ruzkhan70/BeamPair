@@ -1,6 +1,7 @@
 import express, { Request, Response } from 'express';
 import crypto from 'crypto';
 import path from 'path';
+import fs from 'fs';
 import { fileURLToPath } from 'url';
 
 const __filename = fileURLToPath(import.meta.url);
@@ -9,7 +10,7 @@ const __dirname = path.dirname(__filename);
 const app = express();
 const PORT = Number(process.env.PORT) || 3000;
 
-app.use(express.json());
+app.use(express.json({ limit: '10mb' }));
 
 // In-memory security vault for validated tokens and devices (mirrored/synced with Firestore)
 interface ServerToken {
@@ -247,6 +248,28 @@ app.get('/api/webrtc/ice-servers', (_req: Request, res: Response) => {
   });
 });
 
+// Live Frame Relay (in-memory buffer for instant live stream fallback across cellular/NAT networks)
+const sessionLiveFrames = new Map<string, { frame: string; timestamp: number }>();
+
+app.post('/api/stream/frame/:sessionId', (req: Request, res: Response) => {
+  const { sessionId } = req.params;
+  const { frame } = req.body;
+  if (!sessionId || !frame) {
+    return res.status(400).json({ error: 'sessionId and frame required' });
+  }
+  sessionLiveFrames.set(sessionId, { frame, timestamp: Date.now() });
+  return res.json({ success: true, timestamp: Date.now() });
+});
+
+app.get('/api/stream/frame/:sessionId', (req: Request, res: Response) => {
+  const { sessionId } = req.params;
+  const data = sessionLiveFrames.get(sessionId);
+  if (!data) {
+    return res.status(404).json({ error: 'No frame available' });
+  }
+  return res.json(data);
+});
+
 // Health check endpoint
 app.get('/api/health', (_req: Request, res: Response) => {
   res.json({ status: 'ok', time: new Date().toISOString() });
@@ -263,6 +286,21 @@ async function startServer() {
       appType: 'spa',
     });
     app.use(vite.middlewares);
+
+    // Universal catch-all for any SPA route / query param deep-link
+    app.use('*', async (req, res, next) => {
+      if (req.method !== 'GET') return next();
+      const url = req.originalUrl;
+      if (url.startsWith('/api')) return next();
+      try {
+        let template = await fs.promises.readFile(path.resolve(__dirname, 'index.html'), 'utf-8');
+        template = await vite.transformIndexHtml(url, template);
+        res.status(200).set({ 'Content-Type': 'text/html' }).end(template);
+      } catch (e) {
+        vite.ssrFixStacktrace(e as Error);
+        next(e);
+      }
+    });
   } else {
     app.use(express.static(path.resolve(__dirname, 'dist')));
     app.get('*', (_req: Request, res: Response) => {

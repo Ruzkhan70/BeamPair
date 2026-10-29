@@ -125,16 +125,60 @@ export async function addSessionIceCandidate(
 ): Promise<void> {
   const path = `sessions/${sessionId}/iceCandidates`;
   try {
+    const jsonCandidate = candidate.toJSON();
+    if (!jsonCandidate.candidate) {
+      // Empty end-of-candidate marker, skip Firestore serialization to avoid issues
+      return;
+    }
     const candidateData: IceCandidateData = {
-      candidate: JSON.stringify(candidate.toJSON()),
-      sdpMid: candidate.sdpMid,
-      sdpMLineIndex: candidate.sdpMLineIndex,
+      candidate: JSON.stringify(jsonCandidate),
+      sdpMid: candidate.sdpMid ?? null,
+      sdpMLineIndex: candidate.sdpMLineIndex ?? null,
       sender,
       createdAt: Date.now(),
     };
     await addDoc(collection(db, 'sessions', sessionId, 'iceCandidates'), candidateData);
   } catch (err) {
     handleFirestoreError(err, OperationType.CREATE, path);
+  }
+}
+
+/**
+ * Send a remote control command to the session peer
+ */
+export async function sendSessionRemoteCommand(
+  sessionId: string,
+  command: { action: string; value?: any }
+): Promise<void> {
+  const path = `sessions/${sessionId}`;
+  try {
+    await updateDoc(doc(db, 'sessions', sessionId), {
+      remoteCommand: {
+        ...command,
+        timestamp: Date.now(),
+      },
+    });
+  } catch (err) {
+    handleFirestoreError(err, OperationType.UPDATE, path);
+  }
+}
+
+/**
+ * Update the latest live video frame snapshot in Firestore for cross-network fallback
+ */
+export async function updateSessionLiveFrame(
+  sessionId: string,
+  liveFrameBase64: string
+): Promise<void> {
+  const path = `sessions/${sessionId}`;
+  try {
+    await updateDoc(doc(db, 'sessions', sessionId), {
+      liveFrame: liveFrameBase64,
+      lastFrameAt: Date.now(),
+    });
+  } catch (err) {
+    // Non-blocking fallback write
+    console.debug('Live frame update note:', err);
   }
 }
 
