@@ -45,8 +45,15 @@ export async function fetchIceServers(): Promise<RTCIceServer[]> {
     if (res.ok) {
       const data = await res.json();
       if (Array.isArray(data.iceServers) && data.iceServers.length > 0) {
-        // Merge with our robust defaults to ensure fallback TURN is always present
-        return [...data.iceServers, ...DEFAULT_STUN_TURN_SERVERS];
+        // Combine and deduplicate by serialized URLs so ICE checks don't stall on duplicates
+        const merged = [...data.iceServers, ...DEFAULT_STUN_TURN_SERVERS];
+        const seen = new Set<string>();
+        return merged.filter((srv) => {
+          const key = Array.isArray(srv.urls) ? srv.urls.join(',') : srv.urls;
+          if (seen.has(key)) return false;
+          seen.add(key);
+          return true;
+        });
       }
     }
   } catch (err) {
@@ -61,6 +68,7 @@ export class WebRTCManager {
   public localStream: MediaStream = new MediaStream();
   public remoteStream: MediaStream = new MediaStream();
   private iceServers: RTCIceServer[] = DEFAULT_STUN_TURN_SERVERS;
+  private role: 'admin' | 'device' = 'device';
 
   public onIceCandidate: ((candidate: RTCIceCandidate) => void) | null = null;
   public onConnectionStateChange: ((state: RTCPeerConnectionState) => void) | null = null;
@@ -72,14 +80,21 @@ export class WebRTCManager {
   private pendingRemoteCandidates: RTCIceCandidateInit[] = [];
   private isRemoteDescriptionSet = false;
   private currentVideoTrack: MediaStreamTrack | null = null;
-  private isTorchOn = false;
+  public isTorchOn = false;
+  public lastFacingMode: 'user' | 'environment' = 'environment';
+  public isScreenSharingActive = false;
+  private keepAliveAudioCtx: AudioContext | null = null;
+  private keepAliveAudioEl: HTMLAudioElement | null = null;
+  private webLockAbortController: AbortController | null = null;
+  private isClosing = false;
 
   async init(role: 'admin' | 'device'): Promise<void> {
+    this.role = role;
     this.iceServers = await fetchIceServers();
 
     const configuration: RTCConfiguration = {
       iceServers: this.iceServers,
-      iceCandidatePoolSize: 10,
+      iceCandidatePoolSize: 4,
       bundlePolicy: 'max-bundle',
       rtcpMuxPolicy: 'require',
     };
@@ -189,11 +204,23 @@ export class WebRTCManager {
     }
   }
 
-  // Request screen wake lock so the Android phone screen doesn't turn off during support
+  // Expose active local video track for direct ImageCapture background frame reading
+  getActiveVideoTrack(): MediaStreamTrack | null {
+    return this.currentVideoTrack || this.localStream.getVideoTracks()[0] || null;
+  }
+
+  // Request screen wake lock so the Android phone screen doesn't time out during support
   async requestWakeLock(): Promise<void> {
     try {
-      if ('wakeLock' in navigator && (navigator as any).wakeLock) {
-        this.wakeLock = await (navigator as any).wakeLock.request('screen');
+      if (this.isClosing || document.visibilityState !== 'visible') return;
+      if ('wakeLock' in navigator && (navigator as any).wakeLock && !this.wakeLock) {
+        const lock = await (navigator as any).wakeLock.request('screen');
+        this.wakeLock = lock;
+        lock.addEventListener?.('release', () => {
+          if (this.wakeLock === lock) {
+            this.wakeLock = null;
+          }
+        });
       }
     } catch (err) {
       console.warn('WakeLock note:', err);
@@ -209,11 +236,156 @@ export class WebRTCManager {
     }
   }
 
+  // Hold Web Lock so Android Chrome avoids freezing/discarding background streaming tabs
+  acquireWebLock(): void {
+    try {
+      if (this.webLockAbortController || !('locks' in navigator) || !navigator.locks) return;
+      const controller = new AbortController();
+      this.webLockAbortController = controller;
+      navigator.locks
+        .request(
+          'beampair_live_streaming_lock',
+          { signal: controller.signal },
+          () =>
+            new Promise<void>((resolve) => {
+              controller.signal.addEventListener('abort', () => resolve(), { once: true });
+            })
+        )
+        .catch(() => {});
+    } catch {
+      // Ignore if Web Locks unsupported
+    }
+  }
+
+  releaseWebLock(): void {
+    if (this.webLockAbortController) {
+      try {
+        this.webLockAbortController.abort();
+      } catch {}
+      this.webLockAbortController = null;
+    }
+  }
+
+  // Register Automatic Picture-in-Picture (Chromium/Android Chrome triggers this on Home/middle button press)
+  enableAutoPiP(videoEl: HTMLVideoElement | null, onPiPChange?: (active: boolean) => void): void {
+    if (!videoEl) return;
+    try {
+      (videoEl as any).autoPictureInPicture = true;
+      videoEl.disablePictureInPicture = false;
+    } catch {}
+
+    const tryEnterPiP = async () => {
+      try {
+        if (
+          document.pictureInPictureEnabled &&
+          !document.pictureInPictureElement &&
+          videoEl.readyState >= 1
+        ) {
+          await videoEl.requestPictureInPicture();
+          onPiPChange?.(true);
+        }
+      } catch {
+        // Browsers without auto-PiP ignore silently
+      }
+    };
+
+    try {
+      if ('mediaSession' in navigator && navigator.mediaSession) {
+        navigator.mediaSession.setActionHandler('enterpictureinpicture' as any, () => {
+          tryEnterPiP();
+        });
+      }
+    } catch {
+      // Action may not be implemented in non-Chromium browsers
+    }
+  }
+
+  // Keep Android foreground media service & WebRTC streaming active when middle/home button is pressed
+  startKeepAliveAudio(): void {
+    if (this.isClosing) return;
+    this.acquireWebLock();
+
+    try {
+      if (!this.keepAliveAudioCtx) {
+        const AudioCtx = window.AudioContext || (window as any).webkitAudioContext;
+        if (AudioCtx) {
+          this.keepAliveAudioCtx = new AudioCtx();
+          const osc = this.keepAliveAudioCtx.createOscillator();
+          const gain = this.keepAliveAudioCtx.createGain();
+          gain.gain.value = 0.00002; // virtually inaudible, keeps mobile OS audio pipeline live
+          osc.connect(gain);
+
+          // Route into MediaStream -> real <audio> tag so Android promotes tab to Media Foreground Notification
+          const dest = this.keepAliveAudioCtx.createMediaStreamDestination();
+          gain.connect(dest);
+          osc.start();
+
+          if (!this.keepAliveAudioEl) {
+            const audio = document.createElement('audio');
+            audio.srcObject = dest.stream;
+            audio.loop = true;
+            audio.muted = false;
+            audio.volume = 0.01;
+            audio.setAttribute('playsinline', '');
+            this.keepAliveAudioEl = audio;
+          }
+        }
+      }
+
+      if (this.keepAliveAudioCtx && this.keepAliveAudioCtx.state === 'suspended') {
+        this.keepAliveAudioCtx.resume().catch(() => {});
+      }
+
+      if (this.keepAliveAudioEl && this.keepAliveAudioEl.paused) {
+        this.keepAliveAudioEl.play().catch(() => {});
+      }
+
+      if ('mediaSession' in navigator && navigator.mediaSession) {
+        try {
+          navigator.mediaSession.metadata = new MediaMetadata({
+            title: 'BeamPair Live Camera Stream',
+            artist: 'Remote Session Active in Background',
+            album: 'BeamPair Remote Support',
+          });
+          navigator.mediaSession.playbackState = 'playing';
+        } catch {}
+      }
+    } catch (err) {
+      console.warn('Keep-alive audio warning:', err);
+    }
+  }
+
+  stopKeepAliveAudio(): void {
+    this.releaseWebLock();
+    if (this.keepAliveAudioEl) {
+      try {
+        this.keepAliveAudioEl.pause();
+        this.keepAliveAudioEl.srcObject = null;
+      } catch {}
+      this.keepAliveAudioEl = null;
+    }
+    if (this.keepAliveAudioCtx) {
+      try {
+        this.keepAliveAudioCtx.close();
+      } catch {}
+      this.keepAliveAudioCtx = null;
+    }
+    if ('mediaSession' in navigator && navigator.mediaSession) {
+      try {
+        navigator.mediaSession.playbackState = 'none';
+        navigator.mediaSession.setActionHandler('enterpictureinpicture' as any, null);
+      } catch {}
+    }
+  }
+
   // Camera capture with front or rear facing support & Android-resilient fallback
   async startCamera(
     facingMode: 'user' | 'environment' = 'environment',
     specificDeviceId?: string
   ): Promise<MediaStreamTrack> {
+    this.lastFacingMode = facingMode;
+    this.isScreenSharingActive = false;
+
     // Stop any existing video tracks first
     this.localStream.getVideoTracks().forEach((track) => {
       track.stop();
@@ -222,14 +394,15 @@ export class WebRTCManager {
 
     let stream: MediaStream | null = null;
 
-    // Constraint strategy 1: Preferred facing or specific camera ID with 720p/1080p
+    // Constraint strategy 1: Preferred facing or specific camera ID with 720p/1080p and smooth 30-60fps
     const constraintsPrimary: MediaStreamConstraints = {
       video: specificDeviceId
-        ? { deviceId: { exact: specificDeviceId } }
+        ? { deviceId: { exact: specificDeviceId }, frameRate: { ideal: 30, max: 60 } }
         : {
             facingMode: { ideal: facingMode },
             width: { ideal: 1280, max: 1920 },
             height: { ideal: 720, max: 1080 },
+            frameRate: { ideal: 30, max: 60 },
           },
       audio: false,
     };
@@ -249,28 +422,48 @@ export class WebRTCManager {
     }
 
     const videoTrack = stream.getVideoTracks()[0];
+    try {
+      if ('contentHint' in videoTrack) {
+        videoTrack.contentHint = 'motion';
+      }
+    } catch {}
     this.currentVideoTrack = videoTrack;
     this.localStream.addTrack(videoTrack);
-    this.replaceOrAddTrack(videoTrack);
+    // Only push directly onto PeerConnection if remote offer already set transceivers (or we're admin)
+    if (this.role === 'admin' || this.isRemoteDescriptionSet) {
+      this.replaceOrAddTrack(videoTrack);
+    }
 
-    // Keep screen active on phone
+    // Keep screen awake and keep background audio session alive
     await this.requestWakeLock();
+    this.startKeepAliveAudio();
 
     return videoTrack;
   }
 
   // Toggle LED Flashlight / Torch on Android device if supported
-  async toggleTorch(enabled?: boolean): Promise<boolean> {
+  async toggleTorch(enabled?: boolean | any): Promise<boolean> {
     if (!this.currentVideoTrack) return false;
-    const targetState = enabled !== undefined ? enabled : !this.isTorchOn;
+    
+    // Normalize target state from boolean or object wrapper { enabled?: boolean, value?: boolean }
+    let targetState = !this.isTorchOn;
+    if (typeof enabled === 'boolean') {
+      targetState = enabled;
+    } else if (typeof enabled === 'object' && enabled !== null) {
+      if ('enabled' in enabled) targetState = Boolean(enabled.enabled);
+      else if ('value' in enabled) targetState = Boolean(enabled.value);
+    }
+
     try {
       const capabilities = (this.currentVideoTrack.getCapabilities?.() || {}) as any;
-      if (capabilities.torch) {
+      if (capabilities && capabilities.torch) {
         await (this.currentVideoTrack as any).applyConstraints({
           advanced: [{ torch: targetState }],
         });
         this.isTorchOn = targetState;
         return true;
+      } else {
+        console.warn('Torch is not supported by current active camera track (may be front camera or unexposed)');
       }
     } catch (err) {
       console.warn('Torch applyConstraints failed:', err);
@@ -300,11 +493,13 @@ export class WebRTCManager {
 
     const audioTrack = stream.getAudioTracks()[0];
     this.localStream.addTrack(audioTrack);
-    this.replaceOrAddTrack(audioTrack);
+    if (this.role === 'admin' || this.isRemoteDescriptionSet) {
+      this.replaceOrAddTrack(audioTrack);
+    }
     return audioTrack;
   }
 
-  // Screen share capture using getDisplayMedia
+  // Screen share capture using getDisplayMedia with Android mobile support
   async startScreenShare(): Promise<MediaStreamTrack> {
     if (!navigator.mediaDevices?.getDisplayMedia) {
       throw new Error('Screen sharing is not supported by this browser.');
@@ -316,27 +511,109 @@ export class WebRTCManager {
       this.localStream.removeTrack(track);
     });
 
-    const stream = await navigator.mediaDevices.getDisplayMedia({
-      video: {
-        cursor: 'always',
-      } as MediaTrackConstraints,
-      audio: false,
-    });
+    // Android Chrome requires simple { video: true } constraints
+    let stream: MediaStream;
+    try {
+      stream = await navigator.mediaDevices.getDisplayMedia({
+        video: { frameRate: { ideal: 30, max: 60 } },
+        audio: false,
+      });
+    } catch (err) {
+      console.warn('getDisplayMedia primary failed, retrying minimal options:', err);
+      stream = await (navigator.mediaDevices as any).getDisplayMedia();
+    }
 
     const screenTrack = stream.getVideoTracks()[0];
+    try {
+      if ('contentHint' in screenTrack) {
+        screenTrack.contentHint = 'detail';
+      }
+    } catch {}
     this.currentVideoTrack = screenTrack;
+    this.isScreenSharingActive = true;
 
     // Detect when user stops sharing via browser/OS native controls
     screenTrack.onended = () => {
       this.localStream.removeTrack(screenTrack);
+      this.isScreenSharingActive = false;
       if (this.onScreenShareEnded) {
         this.onScreenShareEnded();
       }
     };
 
     this.localStream.addTrack(screenTrack);
-    this.replaceOrAddTrack(screenTrack);
+    if (this.role === 'admin' || this.isRemoteDescriptionSet) {
+      this.replaceOrAddTrack(screenTrack);
+    }
+
+    await this.requestWakeLock();
+    this.startKeepAliveAudio();
+
     return screenTrack;
+  }
+
+  private async tuneVideoSenderParameters(sender: RTCRtpSender): Promise<void> {
+    try {
+      const params = sender.getParameters();
+      if (!params.encodings || params.encodings.length === 0) {
+        params.encodings = [{}];
+      }
+      params.degradationPreference = 'maintain-framerate';
+      params.encodings[0].maxBitrate = 2_500_000;
+      params.encodings[0].maxFramerate = 30;
+      await sender.setParameters(params);
+    } catch {
+      // Some mobile WebViews restrict sender.setParameters; ignore safely
+    }
+  }
+
+  public async bindLocalTracksToPeerConnection(): Promise<void> {
+    if (!this.peerConnection || !this.peerConnection.getTransceivers) return;
+    const videoTrack = this.localStream.getVideoTracks()[0] || null;
+    const audioTrack = this.localStream.getAudioTracks()[0] || null;
+
+    const transceivers = this.peerConnection.getTransceivers();
+    const ops: Promise<void>[] = [];
+
+    transceivers.forEach((t) => {
+      const kind = t.receiver?.track?.kind || t.sender?.track?.kind;
+      if (kind === 'video') {
+        if (videoTrack) {
+          t.direction = 'sendonly';
+          try {
+            if (typeof (t.sender as any).setStreams === 'function') {
+              (t.sender as any).setStreams(this.localStream);
+            }
+          } catch {}
+          ops.push(
+            t.sender
+              .replaceTrack(videoTrack)
+              .then(() => this.tuneVideoSenderParameters(t.sender))
+              .catch((err) => console.warn('Video bind replaceTrack warning:', err))
+          );
+        } else {
+          t.direction = 'inactive';
+        }
+      } else if (kind === 'audio') {
+        if (audioTrack) {
+          t.direction = 'sendonly';
+          try {
+            if (typeof (t.sender as any).setStreams === 'function') {
+              (t.sender as any).setStreams(this.localStream);
+            }
+          } catch {}
+          ops.push(
+            t.sender
+              .replaceTrack(audioTrack)
+              .catch((err) => console.warn('Audio bind replaceTrack warning:', err))
+          );
+        } else {
+          t.direction = 'inactive';
+        }
+      }
+    });
+
+    await Promise.all(ops);
   }
 
   public replaceOrAddTrack(track: MediaStreamTrack): void {
@@ -351,7 +628,16 @@ export class WebRTCManager {
       });
       if (match && match.sender) {
         match.direction = 'sendonly';
-        match.sender.replaceTrack(track).catch((err) => {
+        try {
+          if (typeof (match.sender as any).setStreams === 'function') {
+            (match.sender as any).setStreams(this.localStream);
+          }
+        } catch {}
+        match.sender.replaceTrack(track).then(() => {
+          if (track.kind === 'video') {
+            this.tuneVideoSenderParameters(match.sender);
+          }
+        }).catch((err) => {
           console.warn('replaceTrack warning:', err);
         });
         return;
@@ -363,12 +649,24 @@ export class WebRTCManager {
     const existingSender = senders.find((s) => s.track && s.track.kind === track.kind);
 
     if (existingSender) {
-      existingSender.replaceTrack(track).catch((err) => {
+      try {
+        if (typeof (existingSender as any).setStreams === 'function') {
+          (existingSender as any).setStreams(this.localStream);
+        }
+      } catch {}
+      existingSender.replaceTrack(track).then(() => {
+        if (track.kind === 'video') {
+          this.tuneVideoSenderParameters(existingSender);
+        }
+      }).catch((err) => {
         console.warn('replaceTrack warning:', err);
       });
     } else {
       try {
-        this.peerConnection.addTrack(track, this.localStream);
+        const sender = this.peerConnection.addTrack(track, this.localStream);
+        if (track.kind === 'video') {
+          this.tuneVideoSenderParameters(sender);
+        }
       } catch (err) {
         console.warn('addTrack warning:', err);
       }
@@ -402,25 +700,23 @@ export class WebRTCManager {
   async createAnswer(): Promise<RTCSessionDescriptionInit> {
     if (!this.peerConnection) throw new Error('PeerConnection not initialized');
 
-    // Ensure transceiver directions match local tracks before answering
-    if (this.peerConnection.getTransceivers) {
-      this.peerConnection.getTransceivers().forEach((t) => {
-        if (t.sender && t.sender.track) {
-          t.direction = 'sendonly';
-        }
-      });
-    }
+    // Bind local media tracks to Admin's transceivers cleanly before generating Answer
+    await this.bindLocalTracksToPeerConnection();
 
     const answer = await this.peerConnection.createAnswer();
     await this.peerConnection.setLocalDescription(answer);
     return answer;
   }
 
-  // Set Remote SDP
+  // Set Remote SDP (supports initial setup & ICE restart renegotiation)
   async setRemoteDescription(sdp: RTCSessionDescriptionInit): Promise<void> {
     if (!this.peerConnection) throw new Error('PeerConnection not initialized');
     await this.peerConnection.setRemoteDescription(new RTCSessionDescription(sdp));
     this.isRemoteDescriptionSet = true;
+
+    if (this.role === 'device' && sdp.type === 'offer') {
+      await this.bindLocalTracksToPeerConnection();
+    }
 
     // Flush any pending remote ICE candidates that arrived before SDP
     while (this.pendingRemoteCandidates.length > 0) {
@@ -464,6 +760,7 @@ export class WebRTCManager {
 
   // Teardown and cleanup
   close(): void {
+    this.isClosing = true;
     if (this.currentVideoTrack) {
       try {
         if (this.isTorchOn) {
@@ -498,6 +795,9 @@ export class WebRTCManager {
     }
 
     this.releaseWakeLock();
+    this.stopKeepAliveAudio();
+    this.isTorchOn = false;
+    this.isScreenSharingActive = false;
     this.pendingRemoteCandidates = [];
     this.isRemoteDescriptionSet = false;
   }

@@ -1,0 +1,1213 @@
+# PROJECT: BEAMPAIR
+## Secure Browser-Based Remote Support and Device Inspection Platform
+
+Act as a senior full-stack engineer, WebRTC specialist, Firebase architect, security engineer, and UI/UX designer.
+
+Build a complete, production-oriented web application named **BeamPair**. The application allows an authorized administrator to pair with Android phones through QR codes and conduct explicitly authorized remote-support sessions using browser-supported camera, microphone, and screen-sharing capabilities.
+
+Do not build merely a static UI or a demonstration dashboard. Implement the actual application architecture, authentication, database operations, secure pairing, signaling, media connections, session management, error handling, and testing wherever the required services and credentials are available.
+
+If a service requires configuration or credentials, create the necessary integration points and clearly document the setup. Never pretend that an unconfigured service or unimplemented feature is working.
+
+---
+
+# 1. PRODUCT VISION
+
+BeamPair consists of two interfaces:
+
+1. **Admin Console:** A professional desktop-first dashboard used by the administrator on a PC or laptop.
+2. **Phone Interface:** A responsive website opened on an Android smartphone through a QR code or pairing URL.
+
+The administrator can register devices, generate pairing codes, initiate authorized support sessions, view available live media, inspect connection diagnostics, and revoke access.
+
+The phone interface should be lightweight, responsive, and easy to use on Android Chrome and other compatible browsers.
+
+The application must not require installation from the Google Play Store for its basic browser-supported functionality.
+
+## Core principles
+
+- Secure by default.
+- Explicit authorization for camera, microphone, and screen sharing.
+- No hidden or covert monitoring.
+- No bypassing browser or Android security restrictions.
+- No false claims about unsupported hardware or operating-system controls.
+- Strong server-side authorization.
+- Clear separation between device registration and active media-session consent.
+- Minimal and professional interface design.
+- Graceful handling of unavailable permissions, unsupported features, network failures, and disconnected devices.
+
+---
+
+# 2. TECHNOLOGY STACK
+
+Use the following technology stack unless the current Google AI Studio environment requires a compatible adjustment.
+
+## Frontend
+
+- React.
+- TypeScript.
+- Vite if supported by the selected environment.
+- Tailwind CSS.
+- Lucide React icons.
+- React Router.
+- Reusable React components.
+- A lightweight state-management approach appropriate to the application's complexity.
+
+## Backend and data
+
+- Firebase Authentication.
+- Cloud Firestore.
+- Firebase Cloud Functions or a secure backend service.
+- Firebase App Check where appropriate.
+- Firebase Hosting or another HTTPS-capable hosting provider.
+
+## Real-time communications
+
+- WebRTC for peer-to-peer media connections.
+- WebSocket-based signaling or an appropriately secured Firebase signaling implementation.
+- STUN for connectivity discovery.
+- TURN for relayed connections when direct peer-to-peer communication is unavailable.
+
+Use an established WebRTC implementation and avoid unnecessarily reinventing its networking and connection-management logic.
+
+Do not place private TURN credentials, service-account credentials, administrative secrets, or other server secrets in frontend environment variables that are bundled into the public application.
+
+Provide short-lived, authenticated TURN credentials through a secure backend when the selected TURN provider supports this arrangement.
+
+---
+
+# 3. APPLICATION STRUCTURE
+
+Organize the project into maintainable modules.
+
+Suggested structure:
+
+src/
+  app/
+    App.tsx
+    routes.tsx
+  components/
+    layout/
+    navigation/
+    cards/
+    dialogs/
+    status/
+    video/
+  pages/
+    LoginPage.tsx
+    DashboardPage.tsx
+    DevicesPage.tsx
+    PairingPage.tsx
+    SessionPage.tsx
+    HistoryPage.tsx
+    SecurityLogsPage.tsx
+    SettingsPage.tsx
+    PhonePairingPage.tsx
+    PhoneSessionPage.tsx
+  services/
+    firebase.ts
+    authentication.ts
+    pairing.ts
+    devices.ts
+    sessions.ts
+    signaling.ts
+    webrtc.ts
+    permissions.ts
+    diagnostics.ts
+    audit.ts
+  hooks/
+  types/
+  utils/
+  styles/
+
+functions/
+  src/
+    authentication/
+    pairing/
+    sessions/
+    devices/
+    audit/
+    turnCredentials/
+
+Do not put all application logic into one React component.
+
+Use strict TypeScript types for devices, pairing tokens, sessions, permissions, audit events, and signaling messages.
+
+Separate UI code, Firebase access, security-sensitive operations, and WebRTC connection logic.
+
+---
+
+# 4. AUTHENTICATION AND ADMIN SECURITY
+
+Integrate Firebase Authentication with Google sign-in.
+
+The authorized administrator account is:
+
+ruzkhanhazar@gmail.com
+
+Treat this as an initial deployment configuration, not as the sole security mechanism.
+
+## Required authorization behavior
+
+- Permit the configured administrator to access the admin console.
+- Block unauthorized accounts from accessing administrative pages or data.
+- Show a clean Access Denied screen to unauthorized accounts.
+- Do not display the administrator's raw email address unnecessarily in the interface.
+- Provide a Sign Out button.
+- Restore the authenticated session when the application reloads, according to Firebase's configured authentication persistence.
+- Handle loading, signed-out, unauthorized, and authentication-error states.
+
+## Critical implementation requirement
+
+Do not secure the application merely by checking an email address inside React.
+
+Implement authorization using trusted server-side checks and Firestore Security Rules.
+
+Use an explicit administrative authorization mechanism, such as a Firebase custom claim or a server-maintained administrator allowlist.
+
+Only a trusted administrator or provisioning process may grant administrative privileges.
+
+The backend must independently validate authorization before allowing any administrative operation.
+
+An ordinary user must not be able to grant themselves administrator privileges by editing browser storage, changing JavaScript, or directly calling an API.
+
+Use Firebase Authentication UID as the primary account identifier where possible.
+
+Never store passwords, private credentials, or sensitive authentication tokens in Firestore.
+
+---
+
+# 5. ADMIN CONSOLE DESIGN
+
+Create a premium, modern, professional dashboard.
+
+## Visual direction
+
+- Dark charcoal background with restrained blue accents.
+- Clean typography.
+- Subtle borders.
+- Rounded cards.
+- Clear status badges.
+- Consistent spacing.
+- Responsive layouts.
+- Smooth, restrained transitions.
+- Accessible text contrast.
+- Clear loading, empty, error, and success states.
+
+Avoid excessive gradients, excessive animations, clutter, and oversized decorative elements.
+
+The interface should feel like a professional remote-support and device-management product.
+
+## Sidebar navigation
+
+Create the following navigation items:
+
+1. Overview
+2. Devices
+3. Pair New Device
+4. Live Sessions
+5. Session History
+6. Security Audit
+7. Connection Diagnostics
+8. Settings
+
+Display the BeamPair logo and application name at the top.
+
+Show the administrator's authenticated status without exposing the full email address.
+
+## Dashboard overview
+
+Display summary cards for:
+
+- Registered devices.
+- Currently online devices.
+- Active sessions.
+- Pairing codes awaiting redemption.
+- Recent security events.
+
+Retrieve these values from actual application data.
+
+Do not use permanently hardcoded statistics.
+
+If the database is empty, show appropriate empty states.
+
+## Device directory
+
+Create a searchable and filterable device table.
+
+Each device entry should include the available fields:
+
+- Friendly device name.
+- Device identifier.
+- Browser and platform.
+- First paired timestamp.
+- Last seen timestamp.
+- Online status.
+- Registration status.
+- Last successful session.
+- Available connection information.
+
+Only collect device information that the browser can actually provide and that is necessary for the product.
+
+Do not invent a device model, precise network type, battery percentage, or other telemetry when the browser does not expose it.
+
+Use labels such as "Unavailable in this browser" where appropriate.
+
+Allow the administrator to:
+
+- Open device details.
+- Start an authorized support session.
+- Rename a device.
+- Revoke device access.
+- Delete a device record.
+- Review session history.
+
+Require confirmation for destructive actions.
+
+---
+
+# 6. QR PAIRING SYSTEM
+
+Build a functional QR-based device-pairing workflow.
+
+## Pairing flow
+
+1. The administrator opens Pair New Device.
+2. The admin dashboard requests a new pairing token from the trusted backend.
+3. The backend generates a cryptographically secure, single-use token.
+4. The token expires after five minutes.
+5. The admin dashboard displays a QR code and a copyable pairing URL.
+6. The phone scans the QR code and opens the public HTTPS website.
+7. The phone displays the BeamPair pairing page.
+8. The phone explains that pairing registers the device but does not automatically authorize future media capture.
+9. The phone user explicitly confirms pairing.
+10. The backend validates the token and atomically marks it as redeemed.
+11. The backend registers the device and associates it with the authorized administrator.
+12. The admin dashboard updates to show the paired device.
+
+Use a six-character human-readable code if desired, but do not rely on the six-character code alone as the security boundary.
+
+The QR URL should contain a sufficiently strong random token that cannot reasonably be guessed.
+
+The backend must validate the token's expiration, redemption status, purpose, and authorization context.
+
+## Pairing security
+
+- Generate tokens using a cryptographically secure random-number generator on the trusted backend.
+- Enforce a five-minute expiration.
+- Make each token single-use.
+- Prevent race conditions when redeeming a token.
+- Rate-limit pairing attempts.
+- Avoid revealing whether a guessed token belongs to another administrator.
+- Do not expose private device information in the QR URL.
+- Never allow an unauthenticated visitor to claim arbitrary existing device records.
+- Do not store reusable pairing secrets in browser local storage.
+- Record token generation, redemption, expiration, and failed-attempt events.
+
+Use a short-lived token to authorize pairing only, not as permanent authorization to access camera, microphone, or screen content.
+
+## Pairing URL
+
+Generate the URL from the actual configured public application origin.
+
+Do not hardcode localhost as the production URL.
+
+If the public origin is missing, display a clear configuration error.
+
+Do not silently substitute an unrelated URL or pretend that an inaccessible local development server is publicly reachable.
+
+---
+
+# 7. PHONE INTERFACE
+
+Build a mobile-first experience optimized for Android Chrome.
+
+The phone page should have:
+
+- BeamPair branding.
+- Pairing status.
+- Registered device status.
+- Connection status.
+- Available media capabilities.
+- Permission status.
+- Session approval controls.
+- Camera and microphone controls.
+- Screen-sharing controls where supported.
+- A clear way to end media capture.
+- Troubleshooting information.
+
+Keep the layout simple and uncluttered.
+
+Do not add unnecessary custom persistent banners if the browser or operating system already provides an applicable indicator.
+
+However, never hide, suppress, or bypass mandatory browser permission prompts, Android privacy indicators, screen-capture notifications, or foreground-service notifications.
+
+The interface must clearly explain when media will be transmitted and who can view it.
+
+Pairing a phone must not automatically start camera, microphone, or screen capture.
+
+The phone user must be able to decline a session and stop capture.
+
+---
+
+# 8. CAMERA STREAMING
+
+Implement real camera capture using supported browser media APIs.
+
+Use:
+
+navigator.mediaDevices.getUserMedia()
+
+Request video access only after the phone user has approved the relevant action and browser permission has been granted.
+
+## Camera requirements
+
+- Support the rear camera when available.
+- Support the front camera when available.
+- Display a portrait-oriented local preview.
+- Preserve the original aspect ratio.
+- Avoid stretching the video.
+- Handle device orientation changes.
+- Display an understandable error if the camera is unavailable.
+- Handle permission denial.
+- Handle a camera already being used by another application.
+- Handle camera track termination.
+- Release media tracks when the session ends.
+
+Use an appropriate video element configuration for local and remote previews.
+
+Avoid repeatedly requesting camera access during React rerenders.
+
+Implement camera switching carefully by replacing the active video track when supported.
+
+If the browser or device cannot switch cameras, show an error rather than pretending the operation succeeded.
+
+## Admin video display
+
+The administrator should see a large, responsive video panel.
+
+Preserve the phone's portrait aspect ratio, normally close to 9:16.
+
+Do not stretch the stream to fill a landscape container.
+
+Provide:
+
+- Fullscreen viewing.
+- Connection state.
+- Video quality information when available.
+- Reconnection status.
+- Session duration.
+- Clear indication of whether video is currently available.
+
+---
+
+# 9. MICROPHONE AND AUDIO
+
+Implement microphone capture through:
+
+navigator.mediaDevices.getUserMedia()
+
+Audio capture must be authorized by the phone user and permitted by the browser.
+
+## Requirements
+
+- Request microphone permission only when necessary.
+- Attach the authorized audio track to the WebRTC connection.
+- Support microphone mute and unmute.
+- Update the UI to reflect the actual track state.
+- Handle missing microphones and permission denial.
+- Stop audio tracks when the session ends.
+- Handle browser interruptions and track termination.
+- Avoid autoplay assumptions.
+- Provide a user-initiated playback action when browser autoplay restrictions require it.
+
+Distinguish between muting the transmitted microphone track and muting audio playback on the administrator's computer.
+
+Do not create hidden audio capture or background recording.
+
+Do not claim that microphone access will persist permanently.
+
+Browser permission persistence depends on the browser, site settings, operating system, and user actions.
+
+---
+
+# 10. SCREEN SHARING
+
+Implement browser-supported screen sharing using:
+
+navigator.mediaDevices.getDisplayMedia()
+
+First verify browser support.
+
+Provide a clearly labeled Share Screen button on the phone interface.
+
+When selected:
+
+1. Explain what will be shared.
+2. Let the phone user initiate the action.
+3. Invoke the browser's native screen-selection and permission interface.
+4. Allow the user to select the available screen or content.
+5. Send the approved display track through WebRTC.
+6. Update the admin dashboard when screen sharing becomes active.
+7. Handle the user stopping screen sharing.
+8. Release the display track when the session ends.
+
+## Mandatory limitations
+
+Do not initiate screen capture silently from the admin dashboard.
+
+Do not bypass the browser's screen-selection interface.
+
+Do not assume that mobile browsers support getDisplayMedia in the same way as desktop browsers.
+
+Do not promise that every Android browser can share the home screen, system settings, or other applications.
+
+Check feature availability and handle unsupported browsers gracefully.
+
+If screen sharing is unavailable, tell the user which capability is unsupported and continue offering other supported features.
+
+Camera and screen sharing may not work simultaneously on every Android device. Handle conflicts and browser limitations without crashing the application.
+
+---
+
+# 11. WEBRTC CONNECTION ENGINE
+
+Implement a real WebRTC connection manager.
+
+The architecture should support:
+
+- Offer and answer exchange.
+- ICE candidate exchange.
+- Connection-state monitoring.
+- ICE connection-state monitoring.
+- Track management.
+- Audio and video track negotiation.
+- Session termination.
+- Reconnection attempts.
+- Cleanup of abandoned peer connections.
+- STUN servers.
+- TURN relays.
+
+Use a dedicated signaling service or a carefully secured Firebase signaling implementation.
+
+Signaling data should be validated and associated with a specific authorized session.
+
+Never allow an arbitrary authenticated user to join another device's signaling room.
+
+## Connection states
+
+Display appropriate states:
+
+- Waiting for phone approval.
+- Connecting.
+- Negotiating connection.
+- Connected.
+- Reconnecting.
+- Connection failed.
+- Session ended.
+
+Do not mark a session as connected merely because a signaling message was sent.
+
+Use actual WebRTC connection-state events.
+
+## Network handling
+
+Implement reasonable connection timeouts and reconnection logic.
+
+Support TURN relay fallback when direct connections fail.
+
+Do not claim that STUN alone guarantees connections through symmetric NATs or restrictive cellular networks.
+
+When no TURN server is configured, clearly report that connectivity may be limited.
+
+Provide diagnostics that help the administrator understand why a connection failed.
+
+Avoid logging private media, authentication credentials, or sensitive signaling payloads.
+
+---
+
+# 12. TORCH AND HARDWARE CAPABILITIES
+
+Provide a flashlight control only when the active camera and browser support it.
+
+Use supported track capabilities and constraints where available.
+
+Before displaying the control as available, inspect the active video track's capabilities.
+
+If the browser does not expose torch support, disable the control and display a helpful explanation.
+
+Do not simulate success when the phone's flashlight has not actually changed state.
+
+Do not claim that a webpage can control arbitrary Android hardware.
+
+---
+
+# 13. SNAPSHOT CAPTURE
+
+Allow the administrator to capture a still image from the video stream already authorized for viewing.
+
+Use a canvas or another appropriate browser API to capture a frame from the received video.
+
+Requirements:
+
+- Capture the current displayed video frame.
+- Preserve the correct image dimensions and aspect ratio.
+- Offer PNG download.
+- Handle a missing or inactive video stream.
+- Display a success or error message.
+- Avoid capturing a different device or hidden media source.
+
+Do not create hidden or continuous photo capture.
+
+Snapshot capture must be restricted to an authorized active session.
+
+Do not automatically upload snapshots to a server unless a separately authorized feature explicitly requires it.
+
+---
+
+# 14. BACKGROUND AND RECONNECTION BEHAVIOR
+
+Implement realistic lifecycle handling.
+
+Use the Page Visibility API to detect when the page becomes hidden or visible.
+
+Handle:
+
+- Phone browser tab becoming inactive.
+- Browser suspension.
+- Temporary network loss.
+- Screen lock.
+- Device switching networks.
+- Browser reload.
+- Browser process termination.
+- Media-track termination.
+
+Attempt appropriate reconnection when the page becomes active again and the existing authorization and media permissions still allow it.
+
+Do not promise uninterrupted streaming when the browser is minimized or the phone screen is locked.
+
+Do not use fake audio loops, silent playback, hidden frames, or other tricks to evade Android background restrictions.
+
+Do not assume a web page can keep camera or microphone capture alive after Chrome has been closed.
+
+Persist non-sensitive pairing information as appropriate, but never treat saved pairing data as permission to resume media capture without the required authorization.
+
+A reconnecting device must pass server-side session authorization checks.
+
+---
+
+# 15. DEVICE TELEMETRY
+
+Create a device details panel that shows information actually available to the browser.
+
+Possible fields include:
+
+- Online or offline status.
+- Last seen time.
+- Browser name and version where reasonably detectable.
+- Platform information.
+- Viewport dimensions.
+- Screen orientation.
+- Network connection information when exposed by the browser.
+- Battery percentage and charging state only when supported by the relevant browser API.
+
+Treat telemetry as best-effort.
+
+Use "Unsupported", "Unavailable", or "Not provided by this browser" where necessary.
+
+Do not infer precise battery percentages from connection quality.
+
+Do not claim to know whether the phone is on Wi-Fi, 4G, 5G, or Ethernet when the browser does not provide reliable information.
+
+Use a heartbeat or presence mechanism for online status.
+
+Expire stale presence records after a defined timeout.
+
+Distinguish between:
+
+- Device recently online.
+- Phone webpage open.
+- Pairing successful.
+- WebRTC signaling connected.
+- Media connection active.
+
+These are different states and must not be conflated.
+
+---
+
+# 16. DEVICE REVOCATION AND DELETION
+
+Implement two distinct administrative actions.
+
+## Revoke access
+
+Revocation must:
+
+- Mark the device as revoked in the trusted database.
+- Prevent new sessions from being authorized.
+- Terminate active BeamPair sessions where the backend can enforce termination.
+- Invalidate applicable active session authorization.
+- Reject subsequent signaling and reconnection attempts.
+- Record an audit event.
+
+## Delete device
+
+Deletion must:
+
+- Require explicit administrator confirmation.
+- Remove the registered device record.
+- Clean up associated pairing records where appropriate.
+- Revoke applicable session authorizations.
+- Apply a documented retention policy to historical audit records.
+
+Prefer a server-controlled cleanup process or soft-delete workflow when required for reliable auditing.
+
+Deleting a Firestore document alone is not sufficient if active sessions or related authorization records remain valid.
+
+---
+
+# 17. SESSION HISTORY
+
+Build a session history page containing:
+
+- Session ID.
+- Device identifier.
+- Start time.
+- End time.
+- Duration.
+- Final connection status.
+- Media capabilities used.
+- Session termination reason when known.
+
+Possible termination reasons include:
+
+- Administrator ended the session.
+- Phone user stopped sharing.
+- Phone disconnected.
+- Network connection failed.
+- Session authorization was revoked.
+- Session timed out.
+
+Do not label an event as administrator termination unless the backend can verify that the administrator initiated it.
+
+Use server timestamps.
+
+Restrict session history to authorized administrators.
+
+Use pagination rather than loading the entire database.
+
+---
+
+# 18. SECURITY AUDIT LOGS
+
+Create a security audit page.
+
+Log relevant events such as:
+
+- Successful and unsuccessful administrator sign-ins where observable.
+- Pairing token creation.
+- Pairing token redemption.
+- Pairing expiration.
+- Invalid pairing attempts.
+- Device registration.
+- Session authorization.
+- Session start.
+- Session end.
+- Access revocation.
+- Device deletion.
+- Permission-related errors when voluntarily reported by the client.
+- Connection failures.
+- Authorization failures.
+
+Each audit record should contain appropriate fields such as:
+
+- Event ID.
+- Server timestamp.
+- Event type.
+- Actor UID when known.
+- Device ID when relevant.
+- Session ID when relevant.
+- Outcome.
+- Sanitized diagnostic details.
+
+Never store raw authentication tokens, private TURN credentials, passwords, or captured media in audit logs.
+
+Clients must not be able to modify or delete security audit records directly.
+
+Generate important audit events on the trusted backend.
+
+Apply rate limiting and retention rules.
+
+---
+
+# 19. FIRESTORE DATA MODEL
+
+Create a documented Firestore data model.
+
+Suggested collections:
+
+admins/{adminUid}
+
+devices/{deviceId}
+
+pairingTokens/{tokenId}
+
+sessions/{sessionId}
+
+signalingSessions/{sessionId}
+
+auditLogs/{eventId}
+
+The exact structure can change if there is a more secure and maintainable design.
+
+## Device record
+
+Possible fields:
+
+- deviceId.
+- ownerAdminUid.
+- displayName.
+- registrationStatus.
+- browserInfo.
+- platformInfo.
+- createdAt.
+- lastSeenAt.
+- lastSessionAt.
+- revokedAt.
+
+Store only necessary information.
+
+## Pairing record
+
+Possible fields:
+
+- tokenId.
+- tokenHash.
+- ownerAdminUid.
+- expiresAt.
+- redeemedAt.
+- createdAt.
+- status.
+
+Do not store reusable plaintext pairing secrets unnecessarily.
+
+## Session record
+
+Possible fields:
+
+- sessionId.
+- deviceId.
+- ownerAdminUid.
+- status.
+- createdAt.
+- startedAt.
+- endedAt.
+- authorizedCapabilities.
+- terminationReason.
+
+Use server-side timestamps and validate state transitions.
+
+Do not permit clients to arbitrarily change session ownership, administrator UID, or authorization status.
+
+---
+
+# 20. FIRESTORE SECURITY RULES
+
+Write real Firestore Security Rules.
+
+Do not leave the database in test mode.
+
+Rules must enforce:
+
+- Only authorized administrators can read administrative device directories.
+- Only authorized administrators can view relevant session histories.
+- Only trusted backend operations can create or redeem sensitive pairing tokens.
+- Clients cannot grant themselves administrator privileges.
+- Clients cannot change device ownership.
+- Clients cannot mark a revoked device as active.
+- Clients cannot forge trusted audit events.
+- Clients cannot arbitrarily authorize a session.
+- Signaling messages are restricted to the participants of the corresponding authorized session.
+- Unauthorized users cannot read another administrator's device records.
+
+Use backend-only writes for security-critical operations where possible.
+
+Remember that Firebase Admin SDK operations performed in trusted server environments bypass Firestore Security Rules, so backend functions must implement their own authorization checks.
+
+Provide the complete rules file and explain how to deploy it.
+
+---
+
+# 21. SESSION AUTHORIZATION AND ADMIN-ONLY CONTROLS
+
+The authorized administrator must be the only account permitted to use BeamPair's administrative controls for the devices assigned to that administrator.
+
+The backend must verify the administrator's identity and authorization for every sensitive operation.
+
+However, application-level administrative control must not be confused with control over the phone's operating system.
+
+The administrator can terminate an active BeamPair session from the admin dashboard.
+
+The phone owner must also retain the ability to stop camera or microphone capture, stop screen sharing, close the browser, revoke permissions, or disconnect the device.
+
+Do not attempt to prevent these operating-system or browser actions.
+
+If the phone user ends capture, the application should update the session state and notify the administrator.
+
+Do not silently restart capture after the phone user has explicitly stopped it.
+
+A new media session must follow the configured consent and browser-permission workflow.
+
+---
+
+# 22. SESSION USER EXPERIENCE
+
+Design a straightforward workflow.
+
+## Administrator workflow
+
+1. Sign in with Google.
+2. Open the dashboard.
+3. Generate a pairing code.
+4. Show the QR code and pairing URL.
+5. Wait for the phone to pair.
+6. Select the registered device.
+7. Request a support session.
+8. Wait for phone-user approval.
+9. Display the approved media capabilities.
+10. View live video or screen sharing where available.
+11. Use supported controls.
+12. End the session.
+13. Review the session result.
+
+## Phone workflow
+
+1. Scan the QR code.
+2. Open the public BeamPair website.
+3. Review the pairing information.
+4. Confirm device registration.
+5. See the pairing status.
+6. Receive a session request.
+7. Review which capabilities the session requests.
+8. Approve or decline.
+9. Grant required browser permissions.
+10. Start supported media sharing.
+11. Stop sharing or end the session when desired.
+
+Pairing registration should not automatically authorize future sessions.
+
+Do not treat the phone's initial camera or microphone permission grant as permanent authorization for every subsequent session.
+
+---
+
+# 23. CONNECTION DIAGNOSTICS
+
+Create a Connection Diagnostics page showing:
+
+- Browser support for getUserMedia.
+- Browser support for getDisplayMedia.
+- Secure-context status.
+- Camera permission state where available.
+- Microphone permission state where available.
+- WebRTC support.
+- ICE gathering state.
+- ICE connection state.
+- Peer connection state.
+- Selected candidate-pair information where supported.
+- Whether a TURN server is configured.
+- Connection timing.
+- Recent sanitized error messages.
+
+Use the browser's actual available diagnostic data.
+
+Do not expose private TURN credentials, raw authentication tokens, or sensitive network information.
+
+Explain that ICE candidate information and network diagnostics can reveal technical network details, so they should be available only to authorized administrators and handled carefully.
+
+Clearly distinguish between a TURN server being configured and a TURN relay actually being selected for a connection.
+
+Provide a useful diagnostic message when the configured infrastructure is incomplete.
+
+---
+
+# 24. ERROR HANDLING
+
+Implement meaningful error states throughout the application.
+
+Examples:
+
+- Camera permission denied.
+- Microphone permission denied.
+- Screen sharing unsupported.
+- HTTPS required.
+- Pairing code expired.
+- Pairing code already used.
+- Invalid pairing link.
+- Unauthorized administrator.
+- Device revoked.
+- Device offline.
+- Signaling connection failed.
+- TURN configuration missing.
+- WebRTC connection timed out.
+- Camera already in use.
+- Media track unexpectedly ended.
+- Firebase configuration missing.
+- Backend function unavailable.
+
+Use understandable messages rather than exposing raw stack traces.
+
+Log sanitized technical details for debugging.
+
+Never report success when an operation has failed.
+
+---
+
+# 25. RESPONSIVENESS AND ACCESSIBILITY
+
+Ensure that:
+
+- The admin dashboard works on desktop and adapts to tablets.
+- The phone interface is optimized for small Android screens.
+- Buttons are appropriately sized for touch.
+- Forms have labels.
+- Keyboard navigation works on desktop.
+- Dialogs are accessible.
+- Status messages are understandable.
+- Video layouts preserve aspect ratios.
+- Long device names and identifiers do not break the interface.
+
+Avoid layouts that require horizontal scrolling on a normal phone screen.
+
+---
+
+# 26. PRIVACY AND DATA MINIMIZATION
+
+Use secure transport through HTTPS and WebRTC's encrypted media transport.
+
+Require appropriate authorization before establishing a media connection.
+
+Collect only the device metadata needed for the product.
+
+Do not store captured audio, video, or screen recordings by default.
+
+Do not implement hidden background recording.
+
+Do not send camera or microphone media to unrelated servers.
+
+Document that WebRTC may use TURN relays when direct peer-to-peer connectivity fails.
+
+Explain that browser permission grants, session authorization, and device registration are separate.
+
+Provide a privacy notice describing what the application collects and how long records are retained.
+
+Use an appropriate retention policy for device metadata, session records, and security logs.
+
+---
+
+# 27. ENVIRONMENT CONFIGURATION
+
+Create an .env.example file containing placeholders for public frontend configuration.
+
+For example:
+
+VITE_FIREBASE_API_KEY=
+VITE_FIREBASE_AUTH_DOMAIN=
+VITE_FIREBASE_PROJECT_ID=
+VITE_FIREBASE_STORAGE_BUCKET=
+VITE_FIREBASE_MESSAGING_SENDER_ID=
+VITE_FIREBASE_APP_ID=
+VITE_PUBLIC_APP_URL=
+
+Use only the environment variables actually required by the implementation.
+
+Firebase's client configuration is not a substitute for authorization rules.
+
+Keep server secrets in the deployment platform's secure environment or secret manager.
+
+Do not place service-account private keys, private TURN credentials, or administrative secrets in frontend code.
+
+Create a clear configuration guide covering:
+
+- Firebase project creation.
+- Google Authentication setup.
+- Firestore initialization.
+- Security Rules deployment.
+- Backend function deployment.
+- Public HTTPS hosting.
+- WebRTC signaling configuration.
+- STUN/TURN configuration.
+- Public application URL.
+- Authorized administrator provisioning.
+
+---
+
+# 28. IMPLEMENTATION PHASES
+
+Build the application incrementally.
+
+Do not attempt to generate every file at once if doing so compromises correctness.
+
+## Phase 1: Project foundation
+
+- Initialize the application.
+- Configure TypeScript.
+- Configure routing.
+- Create the visual design system.
+- Build the responsive layouts.
+- Create all primary pages.
+- Implement reusable components.
+- Ensure the project compiles.
+
+## Phase 2: Authentication
+
+- Configure Firebase Authentication.
+- Implement Google sign-in.
+- Add protected routes.
+- Implement trusted administrator authorization.
+- Add the Access Denied screen.
+- Test unauthorized access.
+
+## Phase 3: Database and pairing
+
+- Define Firestore collections.
+- Implement secure backend pairing-token generation.
+- Implement token expiration and single-use redemption.
+- Create the QR code.
+- Create the public pairing URL.
+- Register devices.
+- Implement device directory and revocation.
+
+## Phase 4: Signaling and WebRTC
+
+- Implement session authorization.
+- Implement signaling.
+- Establish WebRTC peer connections.
+- Exchange authorized camera and microphone tracks.
+- Implement connection states.
+- Add STUN/TURN support.
+- Test network failures and cleanup.
+
+## Phase 5: Screen sharing and supported controls
+
+- Implement user-initiated screen sharing where supported.
+- Add camera switching.
+- Add microphone mute controls.
+- Add supported flashlight controls.
+- Add snapshot capture.
+- Handle unsupported features gracefully.
+
+## Phase 6: History and diagnostics
+
+- Implement session history.
+- Implement backend-generated audit logs.
+- Implement device presence.
+- Add connection diagnostics.
+- Add pagination and filtering.
+
+## Phase 7: Security and deployment
+
+- Review all security rules.
+- Test backend authorization.
+- Test pairing-token expiration.
+- Test token reuse prevention.
+- Test revocation.
+- Test session cleanup.
+- Remove placeholder functionality.
+- Build and run tests.
+- Document production deployment.
+
+At the end of each phase, summarize what is working, what remains, and which configuration steps are required.
+
+---
+
+# 29. TESTING REQUIREMENTS
+
+Create tests for security-sensitive backend operations.
+
+At minimum, test:
+
+1. Authorized administrator sign-in.
+2. Unauthorized account rejection.
+3. Pairing-token expiration.
+4. Pairing-token single-use enforcement.
+5. Concurrent attempts to redeem the same token.
+6. Device ownership validation.
+7. Session authorization.
+8. Revoked device rejection.
+9. Unauthorized signaling rejection.
+10. Admin-only administrative operations.
+11. Session termination and cleanup.
+12. Audit-log integrity.
+
+Also test the frontend for:
+
+- Loading states.
+- Permission denial.
+- Missing configuration.
+- Unsupported screen sharing.
+- Disconnected devices.
+- Empty device lists.
+- WebRTC failures.
+- Responsive layouts.
+
+Use Firebase Emulator Suite where appropriate.
+
+Provide manual testing instructions for Android Chrome and desktop Chrome.
+
+Do not claim that a feature passed testing unless it was actually tested.
+
+---
+
+# 30. DEFINITION OF DONE
+
+The application is not complete merely because the dashboard looks attractive.
+
+The initial release must have:
+
+- Working Google authentication.
+- Enforced administrator authorization.
+- Secure pairing-token generation and redemption.
+- Functional QR pairing.
+- Real device registration.
+- Protected Firestore access.
+- Real-time session signaling.
+- WebRTC camera and microphone streaming where supported.
+- Screen sharing where supported and explicitly approved.
+- Device revocation.
+- Session history.
+- Security audit logging.
+- Connection diagnostics.
+- Proper resource cleanup.
+- Meaningful error messages.
+- Documented deployment instructions.
+- No fake success states.
+- No hardcoded mock data presented as live information.
+- No unsupported claims about Android browser capabilities.
+
+Features that cannot be implemented in an ordinary Android webpage must be identified clearly instead of being simulated.
+
+---
+
+# 31. FIRST ACTION
+
+Start by inspecting the available Google AI Studio environment and determining which project files, runtime, integrations, and Firebase configuration are available.
+
+Then:
+
+1. State the proposed implementation architecture briefly.
+2. Identify any configuration prerequisites.
+3. Build Phase 1 immediately.
+4. Create the actual application files.
+5. Run the available build checks.
+6. Fix compilation and runtime errors.
+7. Continue to Phase 2 and subsequent phases incrementally.
+
+Do not stop after writing a development plan.
+
+Do not replace real authentication, pairing, or WebRTC functionality with static mockups.
+
+If a capability requires an external service, implement the integration boundary and document exactly what is needed to activate it.
+
+Prioritize a secure, functional, testable application over superficial completeness.
+
+**Final objective:** Deliver BeamPair as a polished browser-based remote-support platform with secure QR pairing, an administrator dashboard, authorized live media sessions, device management, and reliable diagnostics, while respecting the actual security and capability limits of Android browsers.

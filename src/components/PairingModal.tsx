@@ -15,6 +15,7 @@ import {
 } from 'lucide-react';
 import { recordSecurityAudit } from '../services/signaling';
 import { generatePairingToken } from '../services/pairingService';
+import { BOOTSTRAP_ADMIN_EMAIL } from '../firebase/config';
 
 interface PairingModalProps {
   adminId: string;
@@ -45,14 +46,36 @@ export const PairingModal: React.FC<PairingModalProps> = ({
   const currentOrigin = typeof window !== 'undefined' ? window.location.origin : '';
   const currentPath = typeof window !== 'undefined' ? window.location.pathname.replace(/\/$/, '') : '';
   const currentHostBase = `${currentOrigin}${currentPath}`;
+  const publicSharedHostBase = currentHostBase.includes('https://ais-dev-')
+    ? currentHostBase.replace('https://ais-dev-', 'https://ais-pre-')
+    : currentHostBase;
 
   // Network modes:
-  // - 'public': "Public Shared URL (Phone)" -> uses active functional host (100% online, no 404!)
+  // - 'public': "Public Shared URL (Phone)" -> uses public shared host (ais-pre) accessible to any external phone
   // - 'current': "Current Host" -> active server host
   // - 'github': "GitHub Pages" -> https://ruzkhan70.github.io/BeamPair
   // - 'custom': user entered tunnel / LAN IP
-  const [networkMode, setNetworkMode] = useState<'public' | 'current' | 'github' | 'custom'>('public');
+  const [networkMode, setNetworkMode] = useState<'public' | 'current' | 'github' | 'custom'>('current');
+  const [sharedHostLive, setSharedHostLive] = useState<boolean | null>(null);
   const [customHost, setCustomHost] = useState<string>('');
+
+  // Probe whether ais-pre Shared URL is live or 404; auto-select Shared URL only if it is live
+  useEffect(() => {
+    if (!isOpen) return;
+    fetch('/api/pairing/host-status')
+      .then((r) => (r.ok ? r.json() : null))
+      .then((data) => {
+        if (data && typeof data.sharedHostLive === 'boolean') {
+          setSharedHostLive(data.sharedHostLive);
+          if (data.sharedHostLive && publicSharedHostBase !== currentHostBase) {
+            setNetworkMode('public');
+          } else {
+            setNetworkMode('current');
+          }
+        }
+      })
+      .catch(() => setSharedHostLive(false));
+  }, [isOpen, publicSharedHostBase, currentHostBase]);
 
   const getSelectedBaseUrl = useCallback(() => {
     if (networkMode === 'github') {
@@ -61,10 +84,11 @@ export const PairingModal: React.FC<PairingModalProps> = ({
     if (networkMode === 'custom' && customHost.trim()) {
       return customHost.trim().replace(/\/$/, '');
     }
-    // Both 'public' and 'current' use the active functional host URL
-    // Guarantees no 404 "Page not found" error when scanned
-    return currentHostBase;
-  }, [networkMode, customHost, currentHostBase]);
+    if (networkMode === 'current') {
+      return currentHostBase;
+    }
+    return publicSharedHostBase;
+  }, [networkMode, customHost, currentHostBase, publicSharedHostBase]);
 
   const selectedBaseOrigin = getSelectedBaseUrl();
   const pairingUrl = token ? `${selectedBaseOrigin}/?pair=${token}&role=phone` : '';
@@ -104,7 +128,7 @@ export const PairingModal: React.FC<PairingModalProps> = ({
     setLoading(true);
     setError(null);
 
-    const effectiveAdminEmail = adminEmail || 'ruzkhanhazar@gmail.com';
+    const effectiveAdminEmail = adminEmail || BOOTSTRAP_ADMIN_EMAIL;
     const effectiveAdminId = adminId || 'admin_primary_bootstrapped';
 
     // Safety timeout: guaranteed that loading never gets stuck
@@ -240,29 +264,38 @@ export const PairingModal: React.FC<PairingModalProps> = ({
             <div className="grid grid-cols-2 gap-1.5">
               <button
                 type="button"
-                onClick={() => setNetworkMode('public')}
-                className={`px-3 py-1.5 rounded-lg text-[11px] font-semibold transition cursor-pointer flex items-center justify-center space-x-1 ${
-                  networkMode === 'public'
-                    ? 'bg-indigo-600 text-white shadow-xs'
-                    : 'bg-slate-900 text-slate-400 hover:text-slate-200 hover:bg-slate-800'
-                }`}
-                title="Public Shared URL scannable by any external phone on cellular/Wi-Fi"
-              >
-                <span>Public Shared URL (Phone)</span>
-              </button>
-              <button
-                type="button"
                 onClick={() => setNetworkMode('current')}
                 className={`px-3 py-1.5 rounded-lg text-[11px] font-semibold transition cursor-pointer flex items-center justify-center space-x-1 ${
                   networkMode === 'current'
                     ? 'bg-indigo-600 text-white shadow-xs'
                     : 'bg-slate-900 text-slate-400 hover:text-slate-200 hover:bg-slate-800'
                 }`}
-                title="Current active server host"
+                title="Current active working server URL"
               >
-                <span>Current Host</span>
+                <span>Active App URL</span>
+              </button>
+              <button
+                type="button"
+                onClick={() => setNetworkMode('public')}
+                className={`px-3 py-1.5 rounded-lg text-[11px] font-semibold transition cursor-pointer flex items-center justify-center space-x-1 ${
+                  networkMode === 'public'
+                    ? 'bg-indigo-600 text-white shadow-xs'
+                    : 'bg-slate-900 text-slate-400 hover:text-slate-200 hover:bg-slate-800'
+                }`}
+                title="Public Shared URL (requires clicking Share in AI Studio first)"
+              >
+                <span>
+                  Shared Phone URL{' '}
+                  {sharedHostLive === false ? '(404)' : sharedHostLive === true ? '(Live)' : ''}
+                </span>
               </button>
             </div>
+
+            {networkMode === 'public' && sharedHostLive === false && (
+              <div className="p-2 bg-amber-500/10 border border-amber-500/30 rounded-lg text-[11px] text-amber-300 leading-relaxed">
+                This Shared URL (`ais-pre`) returns <strong>404</strong> until you click <strong>Share App</strong> in AI Studio. Switch to <strong>Active App URL</strong> above (or copy the 48-char token below).
+              </div>
+            )}
 
             <div className="flex items-center justify-between pt-1.5 border-t border-slate-800/80 text-[10px]">
               <span className="text-slate-500 truncate mr-2">
@@ -406,7 +439,7 @@ export const PairingModal: React.FC<PairingModalProps> = ({
               <div className="w-full mt-3 p-2.5 bg-slate-800/60 border border-slate-700/60 rounded-xl flex items-start space-x-2">
                 <ShieldCheck className="w-4 h-4 text-emerald-400 shrink-0 mt-0.5" />
                 <p className="text-[11px] text-slate-300 leading-relaxed">
-                  Single-use cryptographic token bound to administrator <span className="text-emerald-400 font-medium">{adminEmail || 'ruzkhanhazar@gmail.com'}</span>. Compatible with any Android smartphone (Samsung, Pixel, Xiaomi, OnePlus, Motorola, etc.).
+                  Single-use cryptographic token bound to the authorized administrator. Compatible with any Android smartphone (Samsung, Pixel, Xiaomi, OnePlus, Motorola, etc.).
                 </p>
               </div>
 

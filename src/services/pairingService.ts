@@ -27,30 +27,18 @@ function generateClientCryptoToken(): string {
 }
 
 /**
- * Generate pairing token: tries backend first, falls back to direct Firestore (for GitHub Pages static hosting)
+ * Generate pairing token: always persists to Firestore so ANY phone on ANY URL
+ * (Shared URL, Dev URL, mobile network, or after server restarts) can validate and pair.
  */
 export async function generatePairingToken(
   adminId: string,
   adminEmail: string
 ): Promise<PairingGenerateResponse> {
-  try {
-    const res = await fetch('/api/pairing/generate', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ adminId, adminEmail }),
-    });
-    if (res.ok) {
-      return await res.json();
-    }
-  } catch {
-    // Backend API unavailable (e.g. running on static GitHub Pages)
-  }
-
-  // Direct Firestore fallback for GitHub Pages
   const token = generateClientCryptoToken();
   const ttlMs = 5 * 60 * 1000;
   const expiresAt = Date.now() + ttlMs;
 
+  // Authoritative cross-device store in Firestore
   await setDoc(doc(db, 'pairingTokens', token), {
     token,
     adminId,
@@ -60,6 +48,13 @@ export async function generatePairingToken(
     createdAt: new Date().toISOString(),
   });
 
+  // Best-effort mirror to local backend memory (non-blocking)
+  fetch('/api/pairing/generate', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ adminId, adminEmail, token, expiresAt }),
+  }).catch(() => {});
+
   return {
     token,
     expiresAt,
@@ -69,10 +64,36 @@ export async function generatePairingToken(
 }
 
 /**
- * Validate pairing token: tries backend first, falls back to direct Firestore
+ * Validate pairing token using Firestore as the authoritative source of truth
  */
 export async function validatePairingToken(token: string): Promise<PairingValidateResponse> {
   const cleanToken = token.trim();
+  if (!cleanToken) {
+    throw new Error('Please enter a valid pairing code');
+  }
+
+  const snap = await getDoc(doc(db, 'pairingTokens', cleanToken));
+  if (snap.exists()) {
+    const data = snap.data();
+    if (data.status === 'redeemed') {
+      throw new Error('This pairing QR code has already been redeemed');
+    }
+    if (data.status === 'cancelled') {
+      throw new Error('This pairing QR code was cancelled by the administrator');
+    }
+    if (data.status === 'expired' || Date.now() > data.expiresAt) {
+      throw new Error('This pairing QR code has expired');
+    }
+
+    return {
+      valid: true,
+      adminEmail: data.adminEmail,
+      adminId: data.adminId,
+      expiresInSeconds: Math.max(0, Math.floor((data.expiresAt - Date.now()) / 1000)),
+    };
+  }
+
+  // Legacy backend fallback for tokens generated strictly in server memory
   try {
     const res = await fetch('/api/pairing/validate', {
       method: 'POST',
@@ -82,35 +103,21 @@ export async function validatePairingToken(token: string): Promise<PairingValida
     if (res.ok) {
       return await res.json();
     }
-  } catch {
-    // Backend API unavailable (e.g. running on static GitHub Pages)
+    const errBody = await res.json().catch(() => null);
+    if (errBody?.error) {
+      throw new Error(errBody.error);
+    }
+  } catch (err) {
+    if (err instanceof Error && !err.message.includes('Failed to fetch')) {
+      throw err;
+    }
   }
 
-  // Direct Firestore fallback
-  const snap = await getDoc(doc(db, 'pairingTokens', cleanToken));
-  if (!snap.exists()) {
-    throw new Error('Pairing code not found or invalid');
-  }
-
-  const data = snap.data();
-  if (data.status === 'redeemed') {
-    throw new Error('This pairing QR code has already been redeemed');
-  }
-
-  if (data.status === 'expired' || Date.now() > data.expiresAt) {
-    throw new Error('This pairing QR code has expired');
-  }
-
-  return {
-    valid: true,
-    adminEmail: data.adminEmail,
-    adminId: data.adminId,
-    expiresInSeconds: Math.max(0, Math.floor((data.expiresAt - Date.now()) / 1000)),
-  };
+  throw new Error('Pairing code not found or invalid');
 }
 
 /**
- * Redeem pairing token: tries backend first, falls back to direct Firestore
+ * Redeem pairing token atomically in Firestore
  */
 export async function redeemPairingToken(params: {
   token: string;
@@ -119,39 +126,45 @@ export async function redeemPairingToken(params: {
   deviceModel?: string;
   platform?: string;
 }): Promise<{ success: boolean; adminId: string; adminEmail: string }> {
-  try {
-    const res = await fetch('/api/pairing/redeem', {
+  const cleanToken = params.token.trim();
+  const ref = doc(db, 'pairingTokens', cleanToken);
+  const snap = await getDoc(ref);
+
+  if (snap.exists()) {
+    const data = snap.data();
+    if (data.status !== 'pending' || Date.now() > data.expiresAt) {
+      throw new Error('Token is no longer valid or already redeemed');
+    }
+
+    await updateDoc(ref, {
+      status: 'redeemed',
+      redeemedAt: Date.now(),
+      redeemedByDeviceId: params.deviceId,
+    });
+
+    // Best-effort notify backend
+    fetch('/api/pairing/redeem', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(params),
-    });
-    if (res.ok) {
-      return await res.json();
-    }
-  } catch {
-    // Backend API unavailable
+      body: JSON.stringify({ ...params, token: cleanToken }),
+    }).catch(() => {});
+
+    return {
+      success: true,
+      adminId: data.adminId,
+      adminEmail: data.adminEmail,
+    };
   }
 
-  // Direct Firestore fallback
-  const ref = doc(db, 'pairingTokens', params.token);
-  const snap = await getDoc(ref);
-  if (!snap.exists()) {
-    throw new Error('Pairing token not found');
-  }
-  const data = snap.data();
-  if (data.status !== 'pending' || Date.now() > data.expiresAt) {
-    throw new Error('Token is no longer valid or already redeemed');
-  }
-
-  await updateDoc(ref, {
-    status: 'redeemed',
-    redeemedAt: Date.now(),
-    redeemedByDeviceId: params.deviceId,
+  // Fallback to backend API if token only existed in server memory
+  const res = await fetch('/api/pairing/redeem', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ ...params, token: cleanToken }),
   });
-
-  return {
-    success: true,
-    adminId: data.adminId,
-    adminEmail: data.adminEmail,
-  };
+  if (res.ok) {
+    return await res.json();
+  }
+  const errBody = await res.json().catch(() => null);
+  throw new Error(errBody?.error || 'Pairing token not found');
 }

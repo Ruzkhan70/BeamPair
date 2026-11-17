@@ -137,6 +137,19 @@
           "type": "string",
           "maxLength": 128,
           "description": "Active session ID requested or in progress for this device."
+        },
+        "locationPermission": {
+          "type": "string",
+          "enum": ["granted", "denied", "prompt", "unknown"],
+          "description": "Last recorded browser geolocation permission state."
+        },
+        "location": {
+          "type": "object",
+          "description": "Last reported GPS coordinates and accuracy metadata."
+        },
+        "locationPingRequestedAt": {
+          "type": "number",
+          "description": "Timestamp of last admin out-of-session GPS ping request."
         }
       },
       "required": ["deviceId", "adminId", "deviceName", "status", "isRevoked", "pairedAt"]
@@ -221,6 +234,18 @@
         "lastFrameAt": {
           "type": "number",
           "description": "Timestamp of last live frame update."
+        },
+        "isTorchOn": {
+          "type": "boolean",
+          "description": "Whether phone LED torch is active."
+        },
+        "isScreenSharing": {
+          "type": "boolean",
+          "description": "Whether phone screen sharing is active."
+        },
+        "remoteCommand": {
+          "type": "object",
+          "description": "Latest fallback remote control command payload."
         }
       },
       "required": ["sessionId", "adminId", "deviceId", "status", "startedAt"]
@@ -284,6 +309,7 @@
             "SESSION_CONNECTED",
             "SESSION_DISCONNECTED_BY_ADMIN",
             "SESSION_DISCONNECTED_BY_DEVICE",
+            "GPS_PING_REQUESTED",
             "UNAUTHORIZED_ACCESS_ATTEMPT"
           ],
           "description": "Security event classification."

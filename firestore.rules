@@ -88,7 +88,7 @@ service cloud.firestore {
       // Create: When a device is paired
       allow create: if isValidId(deviceId) &&
         incoming().keys().hasAll(['deviceId', 'adminId', 'deviceName', 'status', 'isRevoked', 'pairedAt']) &&
-        incoming().keys().hasOnly(['deviceId', 'adminId', 'deviceName', 'status', 'isRevoked', 'pairedAt', 'deviceModel', 'platform', 'cameraPermission', 'microphonePermission', 'screenShareSupported', 'lastSeen', 'currentSessionId']) &&
+        incoming().keys().hasOnly(['deviceId', 'adminId', 'deviceName', 'status', 'isRevoked', 'pairedAt', 'deviceModel', 'platform', 'cameraPermission', 'microphonePermission', 'screenShareSupported', 'locationPermission', 'location', 'lastSeen', 'currentSessionId']) &&
         incoming().deviceId == deviceId &&
         incoming().deviceId.size() <= 128 &&
         incoming().adminId is string && incoming().adminId.size() <= 128 &&
@@ -104,9 +104,9 @@ service cloud.firestore {
           incoming().adminId == existing().adminId &&
           incoming().deviceId == existing().deviceId &&
           incoming().pairedAt == existing().pairedAt &&
-          incoming().diff(existing()).affectedKeys().hasOnly(['isRevoked', 'deviceName', 'status', 'lastSeen', 'currentSessionId']))
+          incoming().diff(existing()).affectedKeys().hasOnly(['isRevoked', 'deviceName', 'status', 'lastSeen', 'currentSessionId', 'locationPingRequestedAt']))
         ||
-        // Action: Secondary Device updating status, heartbeat, permissions (ONLY if not revoked)
+        // Action: Secondary Device updating status, heartbeat, permissions, location (ONLY if not revoked)
         (existing().isRevoked == false &&
           incoming().adminId == existing().adminId &&
           incoming().deviceId == existing().deviceId &&
@@ -114,7 +114,8 @@ service cloud.firestore {
           incoming().pairedAt == existing().pairedAt &&
           incoming().diff(existing()).affectedKeys().hasOnly([
             'status', 'lastSeen', 'cameraPermission', 'microphonePermission',
-            'screenShareSupported', 'deviceModel', 'platform', 'currentSessionId'
+            'screenShareSupported', 'deviceModel', 'platform', 'currentSessionId',
+            'locationPermission', 'location'
           ]))
       );
 
@@ -148,13 +149,14 @@ service cloud.firestore {
             'requestCamera', 'requestMicrophone', 'requestScreen', 'cameraFacing', 'remoteCommand'
           ]))
         ||
-        // Device actions: answer SDP, connecting/active state, end session
+        // Device actions: answer SDP, connecting/active state, torch/screen state, end session
         (incoming().adminId == existing().adminId &&
           incoming().sessionId == existing().sessionId &&
           incoming().deviceId == existing().deviceId &&
           incoming().startedAt == existing().startedAt &&
           incoming().diff(existing()).affectedKeys().hasOnly([
-            'status', 'sdpAnswer', 'endedAt', 'endedBy', 'terminationReason', 'remoteCommand', 'liveFrame', 'lastFrameAt'
+            'status', 'sdpAnswer', 'endedAt', 'endedBy', 'terminationReason',
+            'remoteCommand', 'liveFrame', 'lastFrameAt', 'isTorchOn', 'isScreenSharing'
           ]))
       );
 
@@ -186,7 +188,7 @@ service cloud.firestore {
           'PAIRING_TOKEN_GENERATED', 'PAIRING_TOKEN_REDEEMED', 'PAIRING_TOKEN_CANCELLED',
           'DEVICE_REGISTERED', 'DEVICE_REVOKED', 'SESSION_REQUESTED', 'SESSION_CONNECTED',
           'SESSION_DISCONNECTED_BY_ADMIN', 'SESSION_DISCONNECTED_BY_DEVICE',
-          'UNAUTHORIZED_ACCESS_ATTEMPT'
+          'GPS_PING_REQUESTED', 'UNAUTHORIZED_ACCESS_ATTEMPT'
         ] &&
         incoming().timestamp is number;
       // Immutable log

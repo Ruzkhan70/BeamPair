@@ -267,3 +267,35 @@ export function listenToSecurityLogs(
     }
   );
 }
+
+/**
+ * Rename a device in Firestore
+ */
+export async function renameDeviceInFirestore(
+  adminId: string,
+  deviceId: string,
+  newDeviceName: string
+): Promise<void> {
+  const path = `devices/${deviceId}`;
+  try {
+    await updateDoc(doc(db, 'devices', deviceId), {
+      deviceName: newDeviceName.trim(),
+    });
+  } catch (err) {
+    handleFirestoreError(err, OperationType.UPDATE, path);
+  }
+}
+
+/**
+ * Trigger an immediate GPS location ping on a paired device via its device document
+ */
+export async function requestDeviceLocationPing(deviceId: string): Promise<void> {
+  const path = `devices/${deviceId}`;
+  try {
+    await updateDoc(doc(db, 'devices', deviceId), {
+      locationPingRequestedAt: Date.now(),
+    });
+  } catch (err) {
+    console.warn('Device location ping request note:', err);
+  }
+}

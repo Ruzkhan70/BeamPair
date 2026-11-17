@@ -20,8 +20,12 @@ import {
   Loader2,
   AlertCircle,
   Wifi,
+  Monitor,
+  MapPin,
+  Crosshair,
+  LocateFixed,
 } from 'lucide-react';
-import { Device, Session } from '../types';
+import { Device, Session, DeviceLocation } from '../types';
 import { WebRTCManager } from '../services/webrtc';
 import {
   listenToSession,
@@ -32,7 +36,8 @@ import {
   recordSecurityAudit,
   sendSessionRemoteCommand,
 } from '../services/signaling';
-import { updateDeviceHeartbeat } from '../services/deviceService';
+import { updateDeviceHeartbeat, listenToDevice, requestDeviceLocationPing } from '../services/deviceService';
+import { DeviceMapViewer } from './DeviceMapViewer';
 
 interface AdminLiveStreamModalProps {
   session: Session;
@@ -58,19 +63,28 @@ export const AdminLiveStreamModal: React.FC<AdminLiveStreamModalProps> = ({
   const [elapsedSeconds, setElapsedSeconds] = useState<number>(0);
   const [viewMode, setViewMode] = useState<'phone' | 'fit'>('phone');
   const [isTorchOn, setIsTorchOn] = useState<boolean>(false);
+  const [isScreenSharing, setIsScreenSharing] = useState<boolean>(session.requestScreen || false);
   const [commandFeedback, setCommandFeedback] = useState<string | null>(null);
   const [snapshotSuccess, setSnapshotSuccess] = useState<boolean>(false);
   const [audioNeedsClick, setAudioNeedsClick] = useState<boolean>(false);
   const [activeRemoteStream, setActiveRemoteStream] = useState<MediaStream | null>(null);
   const [isWebRtcPlaying, setIsWebRtcPlaying] = useState<boolean>(false);
+  const [hasRelayFrame, setHasRelayFrame] = useState<boolean>(false);
   const [liveFallbackFrame, setLiveFallbackFrame] = useState<string | null>(null);
+  const [showMiniMap, setShowMiniMap] = useState<boolean>(false);
+  const [liveDeviceLocation, setLiveDeviceLocation] = useState<DeviceLocation | undefined>(device.location);
 
   const videoRef = useRef<HTMLVideoElement | null>(null);
+  const relayImgRef = useRef<HTMLImageElement | null>(null);
+  const fallbackImgRef = useRef<HTMLImageElement | null>(null);
   const audioRef = useRef<HTMLAudioElement | null>(null);
   const containerRef = useRef<HTMLDivElement | null>(null);
   const webrtcRef = useRef<WebRTCManager | null>(null);
   const unsubscribeSessionRef = useRef<(() => void) | null>(null);
   const unsubscribeCandidatesRef = useRef<(() => void) | null>(null);
+  const lastAppliedAnswerRef = useRef<string | null>(null);
+  const iceRetryCountRef = useRef<number>(0);
+  const lastIceRetryAtRef = useRef<number>(0);
 
   // Timer for session duration
   useEffect(() => {
@@ -79,6 +93,16 @@ export const AdminLiveStreamModal: React.FC<AdminLiveStreamModalProps> = ({
     }, 1000);
     return () => clearInterval(timer);
   }, [streamStartedAt]);
+
+  // Real-time Device Location Sync
+  useEffect(() => {
+    const unsub = listenToDevice(device.deviceId, (updatedDev) => {
+      if (updatedDev?.location) {
+        setLiveDeviceLocation(updatedDev.location);
+      }
+    });
+    return () => unsub();
+  }, [device.deviceId]);
 
   const showTemporaryFeedback = (msg: string) => {
     setCommandFeedback(msg);
@@ -106,10 +130,29 @@ export const AdminLiveStreamModal: React.FC<AdminLiveStreamModalProps> = ({
   useEffect(() => {
     const webrtc = new WebRTCManager();
     webrtcRef.current = webrtc;
+    lastAppliedAnswerRef.current = null;
+    iceRetryCountRef.current = 0;
+    lastIceRetryAtRef.current = 0;
+
+    async function attemptAutoIceRestart() {
+      const now = Date.now();
+      if (iceRetryCountRef.current >= 3 || now - lastIceRetryAtRef.current < 4000) return;
+      if (!webrtcRef.current) return;
+      iceRetryCountRef.current += 1;
+      lastIceRetryAtRef.current = now;
+      try {
+        const offer = await webrtcRef.current.restartIce();
+        if (offer?.sdp) {
+          await setSessionOffer(session.sessionId, offer.sdp);
+        }
+      } catch (err) {
+        console.warn('Auto ICE restart warning:', err);
+      }
+    }
 
     async function startAdminConnection() {
       try {
-        setConnectionState('Configuring ICE & STUN/TURN relays...');
+        setConnectionState('connecting');
         await webrtc.init('admin');
 
         // ICE candidate handler
@@ -119,15 +162,32 @@ export const AdminLiveStreamModal: React.FC<AdminLiveStreamModalProps> = ({
 
         webrtc.onConnectionStateChange = (state) => {
           setConnectionState(state);
+          if (state === 'failed' || state === 'disconnected' || state === 'closed') {
+            setIsWebRtcPlaying(false);
+          }
         };
 
         webrtc.onIceConnectionStateChange = (state) => {
           setIceState(state);
+          if (state === 'failed') {
+            setIsWebRtcPlaying(false);
+            attemptAutoIceRestart();
+          }
         };
 
         // When remote stream tracks arrive from secondary phone
         webrtc.onRemoteStreamTrack = (remoteStream, track) => {
           setActiveRemoteStream(remoteStream);
+          track.onunmute = () => {
+            if (track.kind === 'video' && videoRef.current) {
+              videoRef.current.srcObject = remoteStream;
+              videoRef.current.play().catch(() => {});
+            }
+            if (track.kind === 'audio' && audioRef.current) {
+              audioRef.current.srcObject = remoteStream;
+              audioRef.current.play().catch(() => setAudioNeedsClick(true));
+            }
+          };
           if (track.kind === 'video' && videoRef.current) {
             videoRef.current.srcObject = remoteStream;
             videoRef.current.play().catch((err) => {
@@ -143,12 +203,18 @@ export const AdminLiveStreamModal: React.FC<AdminLiveStreamModalProps> = ({
           }
         };
 
+        webrtc.onControlCommand = (cmd) => {
+          if (cmd.action === 'torchStatus') {
+            setIsTorchOn(Boolean(cmd.value));
+          } else if (cmd.action === 'screenSharingActive') {
+            setIsScreenSharing(Boolean(cmd.value));
+          }
+        };
+
         // Create WebRTC Offer
-        setConnectionState('Generating SDP Offer...');
         const offer = await webrtc.createOffer();
         if (offer.sdp) {
           await setSessionOffer(session.sessionId, offer.sdp);
-          setConnectionState('Offer sent, awaiting phone broadcast...');
         }
 
         // Listen for ICE candidates from secondary phone
@@ -160,10 +226,11 @@ export const AdminLiveStreamModal: React.FC<AdminLiveStreamModalProps> = ({
           }
         );
 
-        // Listen to Session document for device's SDP Answer, status & live frame
+        // Listen to Session document for device's SDP Answer (supports ICE restart updates), status & torch
         unsubscribeSessionRef.current = listenToSession(session.sessionId, async (updatedSession) => {
           if (updatedSession.status === 'terminated') {
-            setConnectionState('Session terminated by ' + (updatedSession.endedBy || 'peer'));
+            setConnectionState('terminated');
+            setIsWebRtcPlaying(false);
             handleTeardown();
             return;
           }
@@ -172,15 +239,25 @@ export const AdminLiveStreamModal: React.FC<AdminLiveStreamModalProps> = ({
             setLiveFallbackFrame(updatedSession.liveFrame);
           }
 
-          // If answer is present and not yet set
-          if (updatedSession.sdpAnswer && !webrtc.peerConnection?.remoteDescription) {
+          if (typeof updatedSession.isTorchOn === 'boolean') {
+            setIsTorchOn(updatedSession.isTorchOn);
+          }
+
+          if (typeof updatedSession.isScreenSharing === 'boolean') {
+            setIsScreenSharing(updatedSession.isScreenSharing);
+          }
+
+          // Apply initial or renegotiated SDP Answer cleanly
+          if (updatedSession.sdpAnswer && updatedSession.sdpAnswer !== lastAppliedAnswerRef.current) {
+            const answerSdp = updatedSession.sdpAnswer;
+            lastAppliedAnswerRef.current = answerSdp;
             try {
               await webrtc.setRemoteDescription({
                 type: 'answer',
-                sdp: updatedSession.sdpAnswer,
+                sdp: answerSdp,
               });
-              setConnectionState('connected');
             } catch (err) {
+              lastAppliedAnswerRef.current = null;
               console.error('Error applying remote answer:', err);
             }
           }
@@ -198,29 +275,28 @@ export const AdminLiveStreamModal: React.FC<AdminLiveStreamModalProps> = ({
     };
   }, [session.sessionId, handleTeardown]);
 
-  // Fast frame polling from server relay
+  // Detect WebRTC or multipart MJPEG stream readiness (Chrome doesn't always fire img.onLoad for endless MJPEG)
   useEffect(() => {
-    let isMounted = true;
-    const pollInterval = setInterval(async () => {
-      if (!isMounted) return;
-      try {
-        const res = await fetch(`/api/stream/frame/${session.sessionId}`);
-        if (res.ok) {
-          const data = await res.json();
-          if (data.frame && isMounted) {
-            setLiveFallbackFrame(data.frame);
-          }
+    const detector = setInterval(() => {
+      const vid = videoRef.current;
+      if (vid && vid.videoWidth > 0) {
+        if (vid.paused && !isVideoPaused) {
+          vid.play().catch(() => {});
         }
-      } catch {
-        // server poll note
+        if (!vid.paused) {
+          setIsWebRtcPlaying(true);
+          setVideoResolution(`${vid.videoWidth} × ${vid.videoHeight}px`);
+          return;
+        }
       }
-    }, 280);
-
-    return () => {
-      isMounted = false;
-      clearInterval(pollInterval);
-    };
-  }, [session.sessionId]);
+      const img = relayImgRef.current;
+      if (img && img.naturalWidth > 0) {
+        setHasRelayFrame(true);
+        setVideoResolution(`${img.naturalWidth} × ${img.naturalHeight}px`);
+      }
+    }, 200);
+    return () => clearInterval(detector);
+  }, [viewMode, isVideoPaused]);
 
   // Synchronize remote stream to video element whenever viewMode or stream changes
   useEffect(() => {
@@ -290,22 +366,68 @@ export const AdminLiveStreamModal: React.FC<AdminLiveStreamModalProps> = ({
     const nextTorch = !isTorchOn;
     setIsTorchOn(nextTorch);
     showTemporaryFeedback(nextTorch ? 'Turned flashlight ON' : 'Turned flashlight OFF');
-    const sent = webrtcRef.current?.sendControlCommand('toggleTorch', { enabled: nextTorch });
+    const sent = webrtcRef.current?.sendControlCommand('toggleTorch', nextTorch);
     if (!sent) {
       await sendSessionRemoteCommand(session.sessionId, { action: 'toggleTorch', value: nextTorch });
     }
   };
 
+  // Remotely Request Phone Screen Mirroring
+  const handleRemoteRequestScreen = async () => {
+    showTemporaryFeedback('Requesting phone to mirror screen...');
+    const sent = webrtcRef.current?.sendControlCommand('requestScreen');
+    if (!sent) {
+      await sendSessionRemoteCommand(session.sessionId, { action: 'requestScreen' });
+    }
+  };
+
+  // Remotely Switch Phone Back to Camera Stream
+  const handleRemoteRequestCamera = async () => {
+    showTemporaryFeedback('Switching phone back to camera stream...');
+    const sent = webrtcRef.current?.sendControlCommand('requestCamera');
+    if (!sent) {
+      await sendSessionRemoteCommand(session.sessionId, { action: 'requestCamera' });
+    }
+  };
+
+  // Remotely Request Phone Precise GPS Location
+  const handleRemoteRequestLocation = async () => {
+    showTemporaryFeedback('Requesting precise phone GPS coordinates...');
+    await requestDeviceLocationPing(device.deviceId).catch(console.warn);
+    const sent = webrtcRef.current?.sendControlCommand('requestLocation');
+    if (!sent) {
+      await sendSessionRemoteCommand(session.sessionId, { action: 'requestLocation' });
+    }
+    setShowMiniMap(true);
+    await recordSecurityAudit({
+      adminId,
+      deviceId: device.deviceId,
+      eventType: 'GPS_PING_REQUESTED',
+      details: `Administrator requested remote GPS location ping for session ${session.sessionId}.`,
+    }).catch(console.warn);
+  };
+
   // 5. Take High-Resolution Snapshot
   const handleTakeSnapshot = () => {
-    if (videoRef.current && videoRef.current.videoWidth > 0) {
+    const sourceEl =
+      isWebRtcPlaying && videoRef.current && videoRef.current.videoWidth > 0
+        ? videoRef.current
+        : hasRelayFrame && relayImgRef.current && relayImgRef.current.naturalWidth > 0
+          ? relayImgRef.current
+          : fallbackImgRef.current && fallbackImgRef.current.naturalWidth > 0
+            ? fallbackImgRef.current
+            : null;
+
+    if (sourceEl) {
       try {
         const canvas = document.createElement('canvas');
-        canvas.width = videoRef.current.videoWidth;
-        canvas.height = videoRef.current.videoHeight;
+        const w = sourceEl instanceof HTMLVideoElement ? sourceEl.videoWidth : sourceEl.naturalWidth;
+        const h = sourceEl instanceof HTMLVideoElement ? sourceEl.videoHeight : sourceEl.naturalHeight;
+        canvas.width = w;
+        canvas.height = h;
         const ctx = canvas.getContext('2d');
         if (ctx) {
-          ctx.drawImage(videoRef.current, 0, 0, canvas.width, canvas.height);
+          ctx.drawImage(sourceEl, 0, 0, canvas.width, canvas.height);
           const dataUrl = canvas.toDataURL('image/png');
           const a = document.createElement('a');
           a.href = dataUrl;
@@ -319,21 +441,8 @@ export const AdminLiveStreamModal: React.FC<AdminLiveStreamModalProps> = ({
           return;
         }
       } catch (err) {
-        console.error('Failed to capture snapshot from video:', err);
+        console.error('Failed to capture snapshot from stream:', err);
       }
-    }
-
-    if (liveFallbackFrame) {
-      const a = document.createElement('a');
-      a.href = liveFallbackFrame;
-      a.download = `beampair_snapshot_${device.deviceName.replace(/\s+/g, '_')}_${Date.now()}.jpg`;
-      document.body.appendChild(a);
-      a.click();
-      document.body.removeChild(a);
-      setSnapshotSuccess(true);
-      showTemporaryFeedback('Snapshot captured from phone stream!');
-      setTimeout(() => setSnapshotSuccess(false), 2500);
-      return;
     }
 
     showTemporaryFeedback('No active video feed to capture');
@@ -509,6 +618,44 @@ export const AdminLiveStreamModal: React.FC<AdminLiveStreamModalProps> = ({
           {/* Background Ambient Glow */}
           <div className="absolute inset-0 bg-radial from-indigo-950/20 via-transparent to-transparent pointer-events-none" />
 
+          {/* Floating Live GPS Mini-Map Overlay */}
+          {showMiniMap && (
+            <div className="absolute top-4 right-4 z-40 w-72 sm:w-80 shadow-2xl rounded-2xl overflow-hidden border border-slate-700 bg-slate-950 animate-fade-in">
+              <div className="px-3 py-2 bg-slate-900 border-b border-slate-800 flex items-center justify-between text-xs">
+                <div className="flex items-center space-x-1.5 text-white font-bold">
+                  <MapPin className="w-3.5 h-3.5 text-emerald-400" />
+                  <span>Phone Live GPS</span>
+                </div>
+                <div className="flex items-center space-x-1">
+                  <button
+                    onClick={async () => {
+                      await sendSessionRemoteCommand(session.sessionId, { action: 'requestLocation' });
+                      showTemporaryFeedback('Requested live GPS ping from phone');
+                    }}
+                    className="p-1 hover:bg-slate-800 text-indigo-400 rounded-md transition cursor-pointer"
+                    title="Ping phone for fresh GPS location"
+                  >
+                    <RefreshCw className="w-3 h-3" />
+                  </button>
+                  <button
+                    onClick={() => setShowMiniMap(false)}
+                    className="p-1 hover:bg-slate-800 text-slate-400 hover:text-white rounded-md transition cursor-pointer"
+                  >
+                    <X className="w-3.5 h-3.5" />
+                  </button>
+                </div>
+              </div>
+              <DeviceMapViewer
+                devices={[{ ...device, location: liveDeviceLocation }]}
+                selectedDeviceId={device.deviceId}
+                onRequestLocationPing={async () => {
+                  await handleRemoteRequestLocation();
+                }}
+                compact={true}
+              />
+            </div>
+          )}
+
           {/* VIEW MODE 1: REALISTIC PHONE FRAME (Requested: camera ratio should be the size of the phone) */}
           {viewMode === 'phone' ? (
             <div className="relative h-full max-h-[640px] aspect-[9/18.5] max-w-full flex items-center justify-center">
@@ -522,32 +669,65 @@ export const AdminLiveStreamModal: React.FC<AdminLiveStreamModalProps> = ({
 
                 {/* Phone Screen Display Area */}
                 <div className="relative flex-1 w-full bg-black rounded-[28px] overflow-hidden flex items-center justify-center">
+                  {/* Live WebRTC <video> (kept mounted & non-hidden so Chromium decodes & fires events) */}
                   <video
                     ref={videoRef}
                     autoPlay
                     playsInline
                     muted
                     onLoadedMetadata={handleVideoLoadedMetadata}
+                    onCanPlay={() => {
+                      if (videoRef.current && videoRef.current.videoWidth > 0) {
+                        setIsWebRtcPlaying(true);
+                      }
+                    }}
                     onPlaying={() => setIsWebRtcPlaying(true)}
                     onTimeUpdate={() => setIsWebRtcPlaying(true)}
-                    className={`w-full h-full object-cover ${isWebRtcPlaying ? 'block' : (liveFallbackFrame ? 'hidden' : 'block')}`}
+                    className={`absolute inset-0 w-full h-full object-cover transition-opacity duration-150 ${
+                      isWebRtcPlaying ? 'opacity-100 z-10' : 'opacity-0 pointer-events-none z-0'
+                    }`}
                   />
 
-                  {/* Fallback Live Camera Feed from Phone */}
-                  {!isWebRtcPlaying && liveFallbackFrame && (
+                  {/* Smooth High-FPS MJPEG Live Stream Fallback when WebRTC isn't playing */}
+                  {!isWebRtcPlaying && (
                     <img
+                      ref={relayImgRef}
+                      src={`/api/stream/live/${session.sessionId}`}
+                      alt="Phone Live Camera"
+                      onLoad={() => {
+                        setHasRelayFrame(true);
+                        if (relayImgRef.current && relayImgRef.current.naturalWidth > 0) {
+                          setVideoResolution(`${relayImgRef.current.naturalWidth} × ${relayImgRef.current.naturalHeight}px`);
+                        }
+                      }}
+                      onError={() => setHasRelayFrame(false)}
+                      className={`absolute inset-0 w-full h-full object-cover ${
+                        hasRelayFrame ? 'opacity-100 z-10' : 'opacity-0 pointer-events-none z-0'
+                      }`}
+                    />
+                  )}
+
+                  {/* Cross-Origin Firestore Frame Backup if MJPEG server & WebRTC haven't delivered yet */}
+                  {!isWebRtcPlaying && !hasRelayFrame && liveFallbackFrame && (
+                    <img
+                      ref={fallbackImgRef}
                       src={liveFallbackFrame}
                       alt="Phone Live Camera"
-                      className="w-full h-full object-cover animate-fade-in"
+                      onLoad={() => {
+                        if (fallbackImgRef.current && fallbackImgRef.current.naturalWidth > 0 && videoResolution === 'Detecting feed...') {
+                          setVideoResolution(`${fallbackImgRef.current.naturalWidth} × ${fallbackImgRef.current.naturalHeight}px`);
+                        }
+                      }}
+                      className="absolute inset-0 w-full h-full object-cover z-10"
                     />
                   )}
 
                   {/* Audio receiver element */}
                   <audio ref={audioRef} autoPlay />
 
-                  {/* Connecting / Standby State Overlay inside Phone Screen (only shown if neither WebRTC nor frame relay has arrived) */}
-                  {!isWebRtcPlaying && !liveFallbackFrame && (
-                    <div className="absolute inset-0 flex flex-col items-center justify-center p-6 bg-slate-950/85 backdrop-blur-xs text-center z-10">
+                  {/* Connecting / Standby State Overlay inside Phone Screen */}
+                  {!isWebRtcPlaying && !hasRelayFrame && !liveFallbackFrame && (
+                    <div className="absolute inset-0 flex flex-col items-center justify-center p-6 bg-slate-950/85 backdrop-blur-xs text-center z-20">
                       <Loader2 className="w-8 h-8 text-indigo-400 animate-spin mb-3" />
                       <h4 className="text-white text-xs font-semibold">Connecting to Android Phone</h4>
                       <p className="text-[11px] text-slate-400 mt-1 max-w-[200px] leading-relaxed">
@@ -564,10 +744,10 @@ export const AdminLiveStreamModal: React.FC<AdminLiveStreamModalProps> = ({
                   )}
 
                   {/* Live Watermark on Phone Screen */}
-                  <div className="absolute bottom-3 left-3 right-3 flex items-center justify-between pointer-events-none z-10">
+                  <div className="absolute bottom-3 left-3 right-3 flex items-center justify-between pointer-events-none z-30">
                     <span className="px-2 py-0.5 bg-black/60 backdrop-blur-md border border-white/10 rounded-md text-[10px] font-mono text-emerald-400 flex items-center space-x-1">
                       <span className="w-1.5 h-1.5 bg-emerald-400 rounded-full animate-ping" />
-                      <span>{isWebRtcPlaying ? 'LIVE (WebRTC)' : (liveFallbackFrame ? 'LIVE (Relay)' : 'CONNECTING')}</span>
+                      <span>{isWebRtcPlaying ? 'LIVE (WebRTC 60fps)' : (hasRelayFrame ? 'LIVE (HD Relay)' : (liveFallbackFrame ? 'LIVE (Sync)' : 'CONNECTING'))}</span>
                     </span>
                     <span className="px-2 py-0.5 bg-black/60 backdrop-blur-md border border-white/10 rounded-md text-[10px] font-mono text-slate-300">
                       {videoResolution}
@@ -590,23 +770,49 @@ export const AdminLiveStreamModal: React.FC<AdminLiveStreamModalProps> = ({
                 playsInline
                 muted
                 onLoadedMetadata={handleVideoLoadedMetadata}
+                onCanPlay={() => {
+                  if (videoRef.current && videoRef.current.videoWidth > 0) {
+                    setIsWebRtcPlaying(true);
+                  }
+                }}
                 onPlaying={() => setIsWebRtcPlaying(true)}
                 onTimeUpdate={() => setIsWebRtcPlaying(true)}
-                className={`w-full h-full object-contain ${isWebRtcPlaying ? 'block' : (liveFallbackFrame ? 'hidden' : 'block')}`}
+                className={`absolute inset-0 w-full h-full object-contain transition-opacity duration-150 ${
+                  isWebRtcPlaying ? 'opacity-100 z-10' : 'opacity-0 pointer-events-none z-0'
+                }`}
               />
 
-              {!isWebRtcPlaying && liveFallbackFrame && (
+              {!isWebRtcPlaying && (
                 <img
+                  ref={relayImgRef}
+                  src={`/api/stream/live/${session.sessionId}`}
+                  alt="Phone Live Camera"
+                  onLoad={() => {
+                    setHasRelayFrame(true);
+                    if (relayImgRef.current && relayImgRef.current.naturalWidth > 0) {
+                      setVideoResolution(`${relayImgRef.current.naturalWidth} × ${relayImgRef.current.naturalHeight}px`);
+                    }
+                  }}
+                  onError={() => setHasRelayFrame(false)}
+                  className={`absolute inset-0 w-full h-full object-contain ${
+                    hasRelayFrame ? 'opacity-100 z-10' : 'opacity-0 pointer-events-none z-0'
+                  }`}
+                />
+              )}
+
+              {!isWebRtcPlaying && !hasRelayFrame && liveFallbackFrame && (
+                <img
+                  ref={fallbackImgRef}
                   src={liveFallbackFrame}
                   alt="Phone Live Camera"
-                  className="w-full h-full object-contain animate-fade-in"
+                  className="absolute inset-0 w-full h-full object-contain z-10"
                 />
               )}
 
               <audio ref={audioRef} autoPlay />
 
-              {!isWebRtcPlaying && !liveFallbackFrame && (
-                <div className="absolute inset-0 flex flex-col items-center justify-center p-6 bg-slate-950/85 backdrop-blur-xs text-center z-10">
+              {!isWebRtcPlaying && !hasRelayFrame && !liveFallbackFrame && (
+                <div className="absolute inset-0 flex flex-col items-center justify-center p-6 bg-slate-950/85 backdrop-blur-xs text-center z-20">
                   <Loader2 className="w-10 h-10 text-indigo-400 animate-spin mb-3" />
                   <h4 className="text-white text-sm font-semibold">Connecting to Android Phone</h4>
                   <p className="text-xs text-slate-400 mt-1 max-w-sm">
@@ -623,10 +829,10 @@ export const AdminLiveStreamModal: React.FC<AdminLiveStreamModalProps> = ({
               )}
 
               {/* Live Watermark for Expanded View */}
-              <div className="absolute bottom-4 left-4 right-4 flex items-center justify-between pointer-events-none z-10">
+              <div className="absolute bottom-4 left-4 right-4 flex items-center justify-between pointer-events-none z-30">
                 <span className="px-2.5 py-1 bg-black/70 backdrop-blur-md border border-white/10 rounded-md text-xs font-mono text-emerald-400 flex items-center space-x-1.5">
                   <span className="w-2 h-2 bg-emerald-400 rounded-full animate-ping" />
-                  <span>{isWebRtcPlaying ? 'LIVE (WebRTC 60fps)' : (liveFallbackFrame ? 'LIVE (Relay)' : 'CONNECTING')}</span>
+                  <span>{isWebRtcPlaying ? 'LIVE (WebRTC 60fps)' : (hasRelayFrame ? 'LIVE (HD Relay)' : (liveFallbackFrame ? 'LIVE (Sync)' : 'CONNECTING'))}</span>
                 </span>
                 <span className="px-2.5 py-1 bg-black/70 backdrop-blur-md border border-white/10 rounded-md text-xs font-mono text-slate-300">
                   {videoResolution}
@@ -649,6 +855,21 @@ export const AdminLiveStreamModal: React.FC<AdminLiveStreamModalProps> = ({
             >
               <RefreshCw className="w-3.5 h-3.5 text-indigo-400" />
               <span>Switch Camera</span>
+            </button>
+
+            {/* Mirror Phone Screen */}
+            <button
+              type="button"
+              onClick={isScreenSharing ? handleRemoteRequestCamera : handleRemoteRequestScreen}
+              className={`px-3.5 py-2 border rounded-xl text-xs font-semibold flex items-center space-x-2 transition cursor-pointer shadow-xs active:scale-95 ${
+                isScreenSharing
+                  ? 'bg-indigo-600/30 border-indigo-500/50 text-indigo-300'
+                  : 'bg-slate-800 hover:bg-slate-700 text-slate-200 border-slate-700'
+              }`}
+              title="Mirror Phone Screen / Switch Back to Camera"
+            >
+              <Monitor className="w-3.5 h-3.5 text-indigo-400" />
+              <span>{isScreenSharing ? 'Switch to Camera' : 'Mirror Screen'}</span>
             </button>
 
             {/* Toggle Flashlight / Torch */}
@@ -705,6 +926,29 @@ export const AdminLiveStreamModal: React.FC<AdminLiveStreamModalProps> = ({
             >
               <Download className="w-3.5 h-3.5 text-indigo-400" />
               <span>{snapshotSuccess ? 'Snapshot Saved!' : 'Take Snapshot'}</span>
+            </button>
+
+            {/* GPS Location & Mini-Map Toggle */}
+            <button
+              type="button"
+              onClick={() => {
+                setShowMiniMap(!showMiniMap);
+                if (!showMiniMap && !liveDeviceLocation) {
+                  handleRemoteRequestLocation();
+                }
+              }}
+              className={`px-3.5 py-2 border rounded-xl text-xs font-semibold flex items-center space-x-2 transition cursor-pointer shadow-xs active:scale-95 ${
+                showMiniMap
+                  ? 'bg-emerald-600/30 border-emerald-500/50 text-emerald-300'
+                  : 'bg-slate-800 hover:bg-slate-700 text-slate-200 border-slate-700'
+              }`}
+              title="Toggle Live GPS Location Mini-Map & Ping Location"
+            >
+              <MapPin className={`w-3.5 h-3.5 ${showMiniMap ? 'text-emerald-400' : 'text-slate-400'}`} />
+              <span>{showMiniMap ? 'Hide GPS Map' : 'Phone Location'}</span>
+              {liveDeviceLocation && (
+                <span className="w-2 h-2 rounded-full bg-emerald-400 animate-pulse" />
+              )}
             </button>
           </div>
 

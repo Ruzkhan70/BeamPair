@@ -1,3 +1,14 @@
+export interface DeviceLocation {
+  latitude: number;
+  longitude: number;
+  accuracy: number;
+  altitude?: number | null;
+  heading?: number | null;
+  speed?: number | null;
+  timestamp: number;
+  address?: string;
+}
+
 export interface Device {
   id?: string;
   deviceId: string;
@@ -11,6 +22,9 @@ export interface Device {
   isRevoked: boolean;
   cameraPermission?: 'granted' | 'denied' | 'prompt' | 'unknown';
   microphonePermission?: 'granted' | 'denied' | 'prompt' | 'unknown';
+  locationPermission?: 'granted' | 'denied' | 'prompt' | 'unknown';
+  location?: DeviceLocation;
+  locationPingRequestedAt?: number;
   screenShareSupported?: boolean;
   currentSessionId?: string | null;
 }
@@ -43,10 +57,20 @@ export interface Session {
   endedBy?: 'admin' | 'device' | 'timeout' | 'error';
   terminationReason?: string;
   remoteCommand?: {
-    action: 'switchCamera' | 'toggleTorch' | 'muteAudio' | 'pauseVideo' | string;
+    action:
+      | 'switchCamera'
+      | 'toggleTorch'
+      | 'muteAudio'
+      | 'pauseVideo'
+      | 'requestScreen'
+      | 'requestCamera'
+      | 'requestLocation'
+      | string;
     value?: any;
     timestamp: number;
   };
+  isTorchOn?: boolean;
+  isScreenSharing?: boolean;
   liveFrame?: string;
   lastFrameAt?: number;
 }
@@ -73,6 +97,7 @@ export interface SecurityAuditLog {
     | 'SESSION_CONNECTED'
     | 'SESSION_DISCONNECTED_BY_ADMIN'
     | 'SESSION_DISCONNECTED_BY_DEVICE'
+    | 'GPS_PING_REQUESTED'
     | 'UNAUTHORIZED_ACCESS_ATTEMPT';
   details?: string;
   ipAddress?: string;

@@ -8,6 +8,7 @@ import {
   CheckCircle2,
   ExternalLink,
 } from 'lucide-react';
+import { BOOTSTRAP_ADMIN_EMAIL } from '../firebase/config';
 
 interface NavbarProps {
   currentView: 'admin' | 'secondary';
@@ -74,11 +75,18 @@ export const Navbar: React.FC<NavbarProps> = ({
           {adminEmail ? (
             <div className="flex items-center space-x-2">
               <div className="hidden md:flex flex-col text-right">
-                <span className="text-xs font-medium text-slate-200 truncate max-w-[150px]">{adminEmail}</span>
-                <span className="text-[10px] text-emerald-400 flex items-center justify-end space-x-1">
-                  <span className="w-1.5 h-1.5 bg-emerald-400 rounded-full" />
-                  <span>Authenticated Admin</span>
-                </span>
+                <span className="text-xs font-medium text-slate-200">Administrator</span>
+                {adminEmail.toLowerCase() === BOOTSTRAP_ADMIN_EMAIL.toLowerCase() ? (
+                  <span className="text-[10px] text-emerald-400 flex items-center justify-end space-x-1">
+                    <span className="w-1.5 h-1.5 bg-emerald-400 rounded-full" />
+                    <span>Authorized</span>
+                  </span>
+                ) : (
+                  <span className="text-[10px] text-rose-400 flex items-center justify-end space-x-1">
+                    <span className="w-1.5 h-1.5 bg-rose-400 rounded-full" />
+                    <span>Unauthorized</span>
+                  </span>
+                )}
               </div>
               <button
                 onClick={onSignOut}

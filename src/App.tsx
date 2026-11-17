@@ -1,10 +1,10 @@
-import React, { useEffect, useState } from 'react';
+import React, { useEffect, useState, useRef } from 'react';
 import { GoogleAuthProvider, onAuthStateChanged, signInWithPopup, signOut } from 'firebase/auth';
 import { auth, BOOTSTRAP_ADMIN_EMAIL } from './firebase/config';
 import { Navbar } from './components/Navbar';
 import { AdminDashboard } from './components/AdminDashboard';
 import { SecondaryDeviceView } from './components/SecondaryDeviceView';
-import { ShieldCheck, Smartphone, LogIn, AlertCircle, Loader2 } from 'lucide-react';
+import { ShieldCheck, Smartphone, LogIn, AlertCircle, Loader2, Lock, LogOut, ShieldAlert, ExternalLink } from 'lucide-react';
 
 export default function App() {
   const [currentView, setCurrentView] = useState<'admin' | 'secondary'>('admin');
@@ -12,6 +12,15 @@ export default function App() {
   const [authReady, setAuthReady] = useState<boolean>(false);
   const [initialPairToken, setInitialPairToken] = useState<string>('');
   const [signInError, setSignInError] = useState<string | null>(null);
+  const [isSigningIn, setIsSigningIn] = useState<boolean>(false);
+  const [mapsQuotaExceeded, setMapsQuotaExceeded] = useState<boolean>(false);
+  const signingInRef = useRef<boolean>(false);
+
+  useEffect(() => {
+    const onQuota = () => setMapsQuotaExceeded(true);
+    window.addEventListener('gmp-quota-exceeded', onQuota);
+    return () => window.removeEventListener('gmp-quota-exceeded', onQuota);
+  }, []);
 
   // Check URL query parameters for pairing token or detect mobile device
   useEffect(() => {
@@ -29,13 +38,13 @@ export default function App() {
     }
   }, []);
 
-  // Listen to Firebase Auth state (only attach listeners when auth is confirmed)
+  // Listen to Firebase Auth state
   useEffect(() => {
     const unsubscribe = onAuthStateChanged(auth, (user) => {
       if (user) {
         setAdminUser({
           uid: user.uid,
-          email: user.email || BOOTSTRAP_ADMIN_EMAIL,
+          email: user.email || '',
         });
       } else {
         setAdminUser(null);
@@ -45,9 +54,13 @@ export default function App() {
     return () => unsubscribe();
   }, []);
 
-  // Handle Google Sign-In with popup
+  // Handle Google Sign-In with popup & race condition protection
   const handleGoogleSignIn = async () => {
+    if (signingInRef.current) return;
+    signingInRef.current = true;
+    setIsSigningIn(true);
     setSignInError(null);
+
     const provider = new GoogleAuthProvider();
     provider.setCustomParameters({
       prompt: 'select_account',
@@ -58,13 +71,27 @@ export default function App() {
       if (result.user) {
         setAdminUser({
           uid: result.user.uid,
-          email: result.user.email || BOOTSTRAP_ADMIN_EMAIL,
+          email: result.user.email || '',
         });
       }
     } catch (err: unknown) {
       console.warn('Google Sign-In note:', err);
-      const msg = err instanceof Error ? err.message : 'Sign-in was cancelled or blocked by browser.';
-      setSignInError(msg);
+      const code = (err as any)?.code;
+      const msg = err instanceof Error ? err.message : String(err);
+      if (code === 'auth/popup-closed-by-user' || msg.includes('popup-closed-by-user')) {
+        setSignInError('Google sign-in popup was closed before completing. Click again to sign in.');
+      } else if (code === 'auth/popup-blocked' || msg.includes('popup-blocked')) {
+        setSignInError('Sign-in popup was blocked by your browser. Please allow popups or open in a new tab.');
+      } else if (code === 'auth/cancelled-popup-request') {
+        // Ignored duplicate action
+      } else if (msg.includes('Pending promise was never set')) {
+        setSignInError('Sign-in window closed or interrupted. Click to try again.');
+      } else {
+        setSignInError(msg);
+      }
+    } finally {
+      signingInRef.current = false;
+      setIsSigningIn(false);
     }
   };
 
@@ -77,6 +104,8 @@ export default function App() {
     setAdminUser(null);
   };
 
+  const isAuthorizedAdmin = !!(adminUser && adminUser.email.toLowerCase() === BOOTSTRAP_ADMIN_EMAIL.toLowerCase());
+
   return (
     <div className="min-h-screen bg-slate-950 text-slate-100 flex flex-col font-sans selection:bg-indigo-500/30 selection:text-indigo-200">
       <Navbar
@@ -87,6 +116,23 @@ export default function App() {
         onSignOut={handleSignOut}
       />
 
+      {mapsQuotaExceeded && (
+        <div className="bg-amber-50 border-b border-amber-200 text-amber-900 px-4 py-2.5 text-xs md:text-sm text-center sticky top-0 z-50 shadow-sm">
+          <span>
+            Google Maps Platform quota reached. If you are the app owner, visit{' '}
+            <a
+              href="https://developers.google.com/maps/ai/ai-studio?utm_campaign=gmp_mcp_codeassist_v1_aistudio#quota_exceeded_errors"
+              target="_blank"
+              rel="noopener noreferrer"
+              className="underline font-semibold text-amber-950 hover:text-amber-800"
+            >
+              maps developer site
+            </a>{' '}
+            for instructions to update your account.
+          </span>
+        </div>
+      )}
+
       {/* Main Content Area */}
       <main className="flex-1 flex flex-col">
         {!authReady ? (
@@ -95,16 +141,8 @@ export default function App() {
             <p className="text-xs text-slate-400 font-mono">Initializing BeamPair secure environment...</p>
           </div>
         ) : currentView === 'admin' ? (
-          adminUser ? (
-            <AdminDashboard
-              adminId={adminUser.uid}
-              adminEmail={adminUser.email}
-              onSimulateDevicePair={(token) => {
-                setInitialPairToken(token);
-                setCurrentView('secondary');
-              }}
-            />
-          ) : (
+          !adminUser ? (
+            /* Admin Sign-In Screen */
             <div className="flex-1 flex items-center justify-center p-6 animate-fade-in">
               <div className="bg-slate-900 border border-slate-800 rounded-2xl p-8 max-w-md w-full text-center shadow-2xl space-y-5">
                 <div className="w-16 h-16 bg-gradient-to-tr from-indigo-600/20 to-indigo-500/10 border border-indigo-500/30 text-indigo-400 rounded-2xl mx-auto flex items-center justify-center shadow-lg shadow-indigo-500/10">
@@ -114,29 +152,47 @@ export default function App() {
                 <div>
                   <h3 className="text-lg font-bold text-white tracking-tight">Admin Authentication Required</h3>
                   <p className="text-xs text-slate-400 mt-1.5 leading-relaxed">
-                    Sign in with your administrator account to manage registered devices, generate single-use QR pairing tokens, and conduct live WebRTC remote support sessions.
+                    Sign in with your designated Google account to manage registered devices, generate pairing codes, and conduct live WebRTC remote support sessions.
                   </p>
                 </div>
 
-                <div className="p-3 bg-slate-950 border border-slate-800/80 rounded-xl text-left text-xs space-y-1">
-                  <span className="text-slate-400 block text-[11px]">Authorized Administrator:</span>
-                  <span className="text-emerald-400 font-mono font-medium">{BOOTSTRAP_ADMIN_EMAIL}</span>
-                </div>
-
                 {signInError && (
-                  <div className="p-3 bg-rose-500/10 border border-rose-500/20 rounded-xl flex items-start space-x-2 text-rose-300 text-xs text-left">
-                    <AlertCircle className="w-4 h-4 text-rose-400 shrink-0 mt-0.5" />
-                    <span>{signInError}</span>
+                  <div className="p-3 bg-rose-500/10 border border-rose-500/20 rounded-xl space-y-2 text-left">
+                    <div className="flex items-start space-x-2 text-rose-300 text-xs">
+                      <AlertCircle className="w-4 h-4 text-rose-400 shrink-0 mt-0.5" />
+                      <span>{signInError}</span>
+                    </div>
+                    {window.self !== window.top && (
+                      <a
+                        href={window.location.href}
+                        target="_blank"
+                        rel="noopener noreferrer"
+                        className="inline-flex items-center space-x-1 text-[11px] text-indigo-400 hover:text-indigo-300 underline font-medium pt-1"
+                      >
+                        <ExternalLink className="w-3 h-3" />
+                        <span>Open app in new tab to sign in directly</span>
+                      </a>
+                    )}
                   </div>
                 )}
 
                 <div className="space-y-2.5 pt-2">
                   <button
                     onClick={handleGoogleSignIn}
-                    className="w-full py-3 bg-indigo-600 hover:bg-indigo-500 text-white text-xs font-semibold rounded-xl flex items-center justify-center space-x-2 shadow-lg shadow-indigo-600/25 transition cursor-pointer"
+                    disabled={isSigningIn}
+                    className="w-full py-3 bg-indigo-600 hover:bg-indigo-500 disabled:opacity-60 text-white text-xs font-semibold rounded-xl flex items-center justify-center space-x-2 shadow-lg shadow-indigo-600/25 transition cursor-pointer"
                   >
-                    <LogIn className="w-4 h-4" />
-                    <span>Sign In with Google</span>
+                    {isSigningIn ? (
+                      <>
+                        <Loader2 className="w-4 h-4 animate-spin text-white" />
+                        <span>Connecting with Google...</span>
+                      </>
+                    ) : (
+                      <>
+                        <LogIn className="w-4 h-4" />
+                        <span>Sign In with Google</span>
+                      </>
+                    )}
                   </button>
 
                   <button
@@ -149,6 +205,61 @@ export default function App() {
                 </div>
               </div>
             </div>
+          ) : !isAuthorizedAdmin ? (
+            /* Strict Access Denied Screen for any other user */
+            <div className="flex-1 flex items-center justify-center p-6 animate-fade-in">
+              <div className="bg-slate-900 border border-rose-500/30 rounded-2xl p-8 max-w-md w-full text-center shadow-2xl space-y-5">
+                <div className="w-16 h-16 bg-rose-500/10 border border-rose-500/20 text-rose-400 rounded-2xl mx-auto flex items-center justify-center shadow-lg shadow-rose-500/10">
+                  <Lock className="w-8 h-8" />
+                </div>
+
+                <div>
+                  <h3 className="text-lg font-bold text-white tracking-tight">Access Denied: Restricted Admin Portal</h3>
+                  <p className="text-xs text-slate-300 mt-1.5 leading-relaxed">
+                    This administrator portal is strictly restricted. Only the designated administrator account is authorized to access device sessions and remote controls.
+                  </p>
+                </div>
+
+                <div className="p-3.5 bg-slate-950 border border-rose-500/20 rounded-xl text-left text-xs space-y-2">
+                  <div>
+                    <span className="text-slate-400 block text-[11px]">Currently Signed In As:</span>
+                    <span className="text-rose-400 font-mono font-medium truncate block">{adminUser.email || 'Unknown User'}</span>
+                  </div>
+                  <div className="border-t border-slate-800/80 pt-2">
+                    <span className="text-slate-400 block text-[11px]">Access Status:</span>
+                    <span className="text-rose-400 font-medium">Designated Administrator Only</span>
+                  </div>
+                </div>
+
+                <div className="space-y-2.5 pt-2">
+                  <button
+                    onClick={handleSignOut}
+                    className="w-full py-3 bg-rose-600 hover:bg-rose-500 text-white text-xs font-semibold rounded-xl flex items-center justify-center space-x-2 shadow-lg shadow-rose-600/20 transition cursor-pointer"
+                  >
+                    <LogOut className="w-4 h-4" />
+                    <span>Sign Out & Switch Account</span>
+                  </button>
+
+                  <button
+                    onClick={() => setCurrentView('secondary')}
+                    className="w-full py-2.5 bg-slate-800 hover:bg-slate-700 text-slate-300 text-xs font-medium rounded-xl flex items-center justify-center space-x-2 transition border border-slate-700/80 cursor-pointer"
+                  >
+                    <Smartphone className="w-4 h-4 text-slate-400" />
+                    <span>Switch to Secondary Phone View</span>
+                  </button>
+                </div>
+              </div>
+            </div>
+          ) : (
+            /* Authorized Admin Dashboard */
+            <AdminDashboard
+              adminId={adminUser.uid}
+              adminEmail={adminUser.email}
+              onSimulateDevicePair={(token) => {
+                setInitialPairToken(token);
+                setCurrentView('secondary');
+              }}
+            />
           )
         ) : (
           <div className="flex-1 py-6 flex items-start justify-center">
@@ -167,7 +278,7 @@ export default function App() {
           <span>Real WebRTC PeerConnection & HTTPS Ready</span>
         </div>
         <div className="text-slate-400">
-          BeamPair Remote Device Support • Authorized Admin: <span className="text-indigo-400 font-mono">{BOOTSTRAP_ADMIN_EMAIL}</span>
+          BeamPair Remote Device Support • Enterprise P2P Session Security
         </div>
       </footer>
     </div>

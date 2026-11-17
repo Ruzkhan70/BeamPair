@@ -164,6 +164,21 @@ export async function sendSessionRemoteCommand(
 }
 
 /**
+ * Update session state flags (isTorchOn, isScreenSharing)
+ */
+export async function updateSessionRemoteState(
+  sessionId: string,
+  state: { isTorchOn?: boolean; isScreenSharing?: boolean }
+): Promise<void> {
+  const path = `sessions/${sessionId}`;
+  try {
+    await updateDoc(doc(db, 'sessions', sessionId), state);
+  } catch (err) {
+    console.debug('Session state update note:', err);
+  }
+}
+
+/**
  * Update the latest live video frame snapshot in Firestore for cross-network fallback
  */
 export async function updateSessionLiveFrame(
