@@ -120,7 +120,8 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
   const [embedTimeLeft, setEmbedTimeLeft] = useState<number>(300);
   const [embedLoading, setEmbedLoading] = useState<boolean>(false);
   const [embedCopied, setEmbedCopied] = useState<boolean>(false);
-  const [embedNetworkMode, setEmbedNetworkMode] = useState<'public' | 'current'>('current');
+  const [embedNetworkMode, setEmbedNetworkMode] = useState<'public' | 'current' | 'github' | 'custom'>('current');
+  const [embedCustomHost, setEmbedCustomHost] = useState<string>('');
   const [sharedHostLive, setSharedHostLive] = useState<boolean | null>(null);
 
   // Diagnostics state
@@ -154,7 +155,14 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
   const publicPhoneHostBase = currentHostBase.includes('https://ais-dev-')
     ? currentHostBase.replace('https://ais-dev-', 'https://ais-pre-')
     : currentHostBase;
-  const embedTargetHost = embedNetworkMode === 'public' ? publicPhoneHostBase : currentHostBase;
+  const embedTargetHost =
+    embedNetworkMode === 'github'
+      ? 'https://ruzkhan70.github.io/BeamPair'
+      : embedNetworkMode === 'custom' && embedCustomHost.trim()
+        ? embedCustomHost.trim().replace(/\/$/, '')
+        : embedNetworkMode === 'public'
+          ? publicPhoneHostBase
+          : currentHostBase;
   const embedPairingUrl = embedToken ? `${embedTargetHost}/?pair=${embedToken}&role=phone` : '';
 
   useEffect(() => {
@@ -1044,13 +1052,13 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
             </div>
 
             {/* Network mode selector */}
-            <div className="p-3 bg-slate-950/80 border border-slate-800 rounded-xl space-y-2 text-xs">
+            <div className="p-3 bg-slate-950/80 border border-slate-800 rounded-xl space-y-2.5 text-xs">
               <div className="flex items-center justify-between gap-2 flex-wrap">
                 <span className="text-slate-300 font-medium flex items-center">
                   <Globe className="w-3.5 h-3.5 mr-1.5 text-indigo-400" />
                   Target Phone URL:
                 </span>
-                <div className="flex items-center space-x-1.5">
+                <div className="flex flex-wrap items-center gap-1.5">
                   <button
                     type="button"
                     onClick={() => setEmbedNetworkMode('current')}
@@ -1060,7 +1068,7 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
                         : 'bg-slate-800 text-slate-400 hover:text-slate-200'
                     }`}
                   >
-                    Active App URL (Working)
+                    Active App URL
                   </button>
                   <button
                     type="button"
@@ -1074,14 +1082,50 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
                     Shared Phone URL{' '}
                     {sharedHostLive === false ? '(404)' : sharedHostLive === true ? '(Live)' : ''}
                   </button>
+                  <button
+                    type="button"
+                    onClick={() => setEmbedNetworkMode('github')}
+                    className={`px-2.5 py-1 rounded-md text-[10px] font-semibold transition cursor-pointer ${
+                      embedNetworkMode === 'github'
+                        ? 'bg-purple-600 text-white'
+                        : 'bg-slate-800 text-slate-400 hover:text-slate-200'
+                    }`}
+                  >
+                    GitHub Pages
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => setEmbedNetworkMode('custom')}
+                    className={`px-2.5 py-1 rounded-md text-[10px] font-semibold transition cursor-pointer ${
+                      embedNetworkMode === 'custom'
+                        ? 'bg-indigo-600 text-white'
+                        : 'bg-slate-800 text-slate-400 hover:text-slate-200'
+                    }`}
+                  >
+                    Custom
+                  </button>
                 </div>
               </div>
               <div className="text-[11px] text-slate-400 font-mono truncate">
                 {embedTargetHost}
               </div>
+              {embedNetworkMode === 'custom' && (
+                <input
+                  type="text"
+                  placeholder="e.g. https://your-app.onrender.com or https://ruzkhan70.github.io/BeamPair"
+                  value={embedCustomHost}
+                  onChange={(e) => setEmbedCustomHost(e.target.value)}
+                  className="w-full bg-slate-900 border border-slate-700 text-slate-200 text-xs px-2.5 py-1.5 rounded-lg font-mono focus:outline-hidden focus:border-indigo-500"
+                />
+              )}
+              {embedNetworkMode === 'current' && currentHostBase.includes('ais-dev-') && (
+                <div className="p-2.5 bg-amber-500/10 border border-amber-500/30 rounded-lg text-[11px] text-amber-300 leading-relaxed">
+                  <strong>403 on a new phone?</strong> The developer preview URL (<code>ais-dev</code>) only opens on phones signed into your Google account (<code>ruzkhanhazar@gmail.com</code>) — any other account or signed-out phone gets <strong>403 Forbidden</strong>. To pair any new phone: click <strong>Share</strong> in AI Studio (set visibility to <strong>Public</strong>) and use <strong>Shared Phone URL</strong>, or push &amp; build to <strong>GitHub Pages</strong>.
+                </div>
+              )}
               {embedNetworkMode === 'public' && sharedHostLive === false && (
                 <div className="p-2.5 bg-amber-500/10 border border-amber-500/30 rounded-lg text-[11px] text-amber-300 leading-relaxed">
-                  The Shared URL (<code>ais-pre</code>) is returning <strong>404</strong> because this app hasn&apos;t been published via AI Studio&apos;s <strong>Share</strong> button yet. Use <strong>Active App URL</strong> for phones signed into your Google account, or click <strong>Share</strong> in AI Studio first.
+                  The Shared URL (<code>ais-pre</code>) is returning <strong>404</strong> because this app hasn&apos;t been published via AI Studio&apos;s <strong>Share</strong> button yet. Click <strong>Share</strong> in AI Studio (Public) so any new phone can open it without 403/404, or switch to <strong>GitHub Pages</strong> once pushed &amp; built.
                 </div>
               )}
             </div>

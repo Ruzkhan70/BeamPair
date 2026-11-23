@@ -660,6 +660,7 @@ export const SecondaryDeviceView: React.FC<SecondaryDeviceViewProps> = ({
     let cachedTrackId: string | null = null;
     let imageCapture: any = null;
     let lastFirestorePushAt = 0;
+    let relayPushSupported = true;
 
     const pushFrameFromTrackOrVideo = async () => {
       if (isCancelled || isPushing || !ctx) return;
@@ -720,13 +721,23 @@ export const SecondaryDeviceView: React.FC<SecondaryDeviceViewProps> = ({
             canvas.toBlob((b) => resolve(b), 'image/jpeg', 0.72)
           );
           if (blob && !isCancelled && !isWebRtcConnectedRef.current) {
-            fetch(`/api/stream/push/${activeSession.sessionId}`, {
-              method: 'POST',
-              headers: { 'Content-Type': 'image/jpeg' },
-              body: blob,
-            }).catch(() => {});
+            if (relayPushSupported) {
+              fetch(`/api/stream/push/${activeSession.sessionId}`, {
+                method: 'POST',
+                headers: { 'Content-Type': 'image/jpeg' },
+                body: blob,
+              })
+                .then((res) => {
+                  if (res.status === 404 || res.status === 405) {
+                    relayPushSupported = false;
+                  }
+                })
+                .catch(() => {
+                  relayPushSupported = false;
+                });
+            }
 
-            // Fast ~350ms Firestore fallback frame so cross-origin (ais-dev <-> ais-pre) sessions connect smoothly even under carrier NAT
+            // Fast ~350ms Firestore fallback frame so cross-origin (ais-dev <-> ais-pre / GitHub Pages) sessions connect smoothly even under carrier NAT
             const now = Date.now();
             if (now - lastFirestorePushAt >= 350) {
               lastFirestorePushAt = now;

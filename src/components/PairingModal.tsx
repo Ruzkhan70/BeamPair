@@ -291,9 +291,15 @@ export const PairingModal: React.FC<PairingModalProps> = ({
               </button>
             </div>
 
+            {networkMode === 'current' && currentHostBase.includes('ais-dev-') && (
+              <div className="p-2 bg-amber-500/10 border border-amber-500/30 rounded-lg text-[11px] text-amber-300 leading-relaxed">
+                <strong>403 on a new phone?</strong> <code>ais-dev</code> only works if the phone is signed into your Google account. For any new phone, publish via <strong>Share App (Public)</strong> or deploy to <strong>GitHub Pages</strong>.
+              </div>
+            )}
+
             {networkMode === 'public' && sharedHostLive === false && (
               <div className="p-2 bg-amber-500/10 border border-amber-500/30 rounded-lg text-[11px] text-amber-300 leading-relaxed">
-                This Shared URL (`ais-pre`) returns <strong>404</strong> until you click <strong>Share App</strong> in AI Studio. Switch to <strong>Active App URL</strong> above (or copy the 48-char token below).
+                This Shared URL (`ais-pre`) returns <strong>404</strong> until you click <strong>Share App</strong> in AI Studio (set to Public). Or switch to <strong>GitHub Pages</strong> once pushed &amp; built.
               </div>
             )}
 
