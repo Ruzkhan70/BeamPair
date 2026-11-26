@@ -24,10 +24,15 @@ import {
   MapPin,
   Crosshair,
   Moon,
+  Battery,
+  BatteryCharging,
+  Wifi,
+  Volume2,
 } from 'lucide-react';
 import { Device, Session, DeviceLocation } from '../types';
 import { WebRTCManager } from '../services/webrtc';
 import {
+  ensureDeviceAnonymousAuth,
   registerDeviceInFirestore,
   updateDeviceHeartbeat,
   listenToDevice,
@@ -102,9 +107,19 @@ export const SecondaryDeviceView: React.FC<SecondaryDeviceViewProps> = ({
   const [isBlackoutMode, setIsBlackoutMode] = useState<boolean>(false);
   const [activeFacingMode, setActiveFacingMode] = useState<'user' | 'environment'>('environment');
   const [connectionStatusText, setConnectionStatusText] = useState<string>('Standby');
+  const [authSecurityStatus, setAuthSecurityStatus] = useState<
+    'bound' | 'admin-session' | 'disabled-in-console' | null
+  >(null);
+  const [isAdminTalking, setIsAdminTalking] = useState<boolean>(false);
+  const [deviceHealth, setDeviceHealth] = useState<{
+    batteryLevel?: number;
+    batteryCharging?: boolean;
+    networkType?: string;
+  }>({});
 
   // Preview elements & signaling refs
   const localVideoRef = useRef<HTMLVideoElement | null>(null);
+  const remoteAdminAudioRef = useRef<HTMLAudioElement | null>(null);
   const scannerContainerId = 'qr-reader-container';
   const qrScannerRef = useRef<Html5Qrcode | null>(null);
   const webrtcRef = useRef<WebRTCManager | null>(null);
@@ -118,6 +133,9 @@ export const SecondaryDeviceView: React.FC<SecondaryDeviceViewProps> = ({
   isScreenSharingRef.current = isScreenSharing;
   const currentLocationRef = useRef<DeviceLocation | null>(null);
   currentLocationRef.current = currentLocation;
+  const locationHistoryRef = useRef<DeviceLocation[]>(
+    Array.isArray(device?.locationHistory) ? device!.locationHistory.slice(-25) : []
+  );
   const cameraStateRef = useRef(cameraState);
   cameraStateRef.current = cameraState;
   const micStateRef = useRef(micState);
@@ -129,6 +147,33 @@ export const SecondaryDeviceView: React.FC<SecondaryDeviceViewProps> = ({
   const lastHandledOfferSdpRef = useRef<string | null>(null);
   const startedSessionIdRef = useRef<string | null>(null);
   const lastBlackoutTapRef = useRef<number>(0);
+
+  const getDeviceTelemetry = useCallback(async (): Promise<{
+    batteryLevel?: number;
+    batteryCharging?: boolean;
+    networkType?: string;
+  }> => {
+    const out: { batteryLevel?: number; batteryCharging?: boolean; networkType?: string } = {};
+    try {
+      const nav: any = navigator;
+      if (typeof nav.getBattery === 'function') {
+        const battery = await nav.getBattery();
+        if (battery && typeof battery.level === 'number') {
+          out.batteryLevel = Math.max(0, Math.min(100, Math.round(battery.level * 100)));
+          out.batteryCharging = Boolean(battery.charging);
+        }
+      }
+      const conn = nav.connection || nav.mozConnection || nav.webkitConnection;
+      if (conn) {
+        const label = conn.effectiveType || conn.type;
+        if (typeof label === 'string' && label.trim()) {
+          out.networkType = label.trim().slice(0, 32);
+        }
+      }
+    } catch {}
+    setDeviceHealth(out);
+    return out;
+  }, []);
 
   // Background / Middle Button Keep-Alive (No Popup) & Auto Camera Resume when returning to tab
   useEffect(() => {
@@ -232,7 +277,7 @@ export const SecondaryDeviceView: React.FC<SecondaryDeviceViewProps> = ({
       return;
     }
 
-    const handlePositionSuccess = (pos: GeolocationPosition) => {
+    const handlePositionSuccess = async (pos: GeolocationPosition) => {
       setLocationState('granted');
       setLocationHelpNotice(null);
       const loc: DeviceLocation = {
@@ -246,10 +291,34 @@ export const SecondaryDeviceView: React.FC<SecondaryDeviceViewProps> = ({
       };
       setCurrentLocation(loc);
       currentLocationRef.current = loc;
+
+      // Append to bounded 25-point GPS breadcrumb trail when moved >= ~12m or >= 30s elapsed
+      const hist = locationHistoryRef.current;
+      const lastPt = hist[hist.length - 1];
+      let shouldAppend = !lastPt;
+      if (lastPt) {
+        const dLat = (loc.latitude - lastPt.latitude) * 111320;
+        const dLng =
+          (loc.longitude - lastPt.longitude) *
+          111320 *
+          Math.cos((loc.latitude * Math.PI) / 180);
+        const distM = Math.hypot(dLat, dLng);
+        const dtMs = loc.timestamp - lastPt.timestamp;
+        if (distM >= 12 || dtMs >= 30000) {
+          shouldAppend = true;
+        }
+      }
+      if (shouldAppend) {
+        locationHistoryRef.current = [...hist, loc].slice(-25);
+      }
+
       if (device) {
+        const telemetry = await getDeviceTelemetry();
         updateDeviceHeartbeat(device.deviceId, {
           location: loc,
+          locationHistory: locationHistoryRef.current.slice(-25),
           locationPermission: 'granted',
+          ...telemetry,
         });
       }
     };
@@ -295,7 +364,7 @@ export const SecondaryDeviceView: React.FC<SecondaryDeviceViewProps> = ({
       },
       { enableHighAccuracy: true, timeout: 15000, maximumAge: 3000 }
     );
-  }, [device]);
+  }, [device, getDeviceTelemetry]);
 
   // Automatically start and refresh GPS acquisition via Web Worker (resists Chrome background throttling)
   useEffect(() => {
@@ -472,6 +541,13 @@ export const SecondaryDeviceView: React.FC<SecondaryDeviceViewProps> = ({
     const platform = /Android/i.test(navigator.userAgent) ? 'android' : 'other';
 
     try {
+      // 0. Bind cryptographic Anonymous Firebase Auth session + capture initial health telemetry
+      const [authRes, telemetry] = await Promise.all([
+        ensureDeviceAnonymousAuth(),
+        getDeviceTelemetry(),
+      ]);
+      setAuthSecurityStatus(authRes.status);
+
       // 1. Redeem token atomically in Firestore
       await redeemPairingToken({
         token: validatedAdminInfo.token,
@@ -485,6 +561,7 @@ export const SecondaryDeviceView: React.FC<SecondaryDeviceViewProps> = ({
       const newDevice: Device = {
         deviceId,
         adminId: validatedAdminInfo.adminId,
+        ...(authRes.uid ? { deviceAuthUid: authRes.uid } : {}),
         deviceName: customDeviceName,
         deviceModel: navigator.userAgent.slice(0, 80),
         platform,
@@ -495,7 +572,8 @@ export const SecondaryDeviceView: React.FC<SecondaryDeviceViewProps> = ({
         cameraPermission: grantedCam,
         microphonePermission: grantedMic,
         locationPermission: locationState,
-        ...(currentLocation ? { location: currentLocation } : {}),
+        ...(currentLocation ? { location: currentLocation, locationHistory: [currentLocation] } : {}),
+        ...telemetry,
         screenShareSupported: screenSupported,
       };
 
@@ -511,7 +589,7 @@ export const SecondaryDeviceView: React.FC<SecondaryDeviceViewProps> = ({
         adminId: validatedAdminInfo.adminId,
         deviceId,
         eventType: 'DEVICE_REGISTERED',
-        details: `Secondary phone "${customDeviceName}" successfully paired.`,
+        details: `Secondary phone "${customDeviceName}" successfully paired${authRes.uid ? ' (UID-locked)' : ''}.`,
       });
     } catch (err: unknown) {
       setValidationError(err instanceof Error ? err.message : 'Failed to register paired device');
@@ -537,23 +615,39 @@ export const SecondaryDeviceView: React.FC<SecondaryDeviceViewProps> = ({
   useEffect(() => {
     if (!device) return;
 
-    // Send initial online heartbeat
-    updateDeviceHeartbeat(device.deviceId, {
-      status: 'online',
-      cameraPermission: cameraStateRef.current,
-      microphonePermission: micStateRef.current,
-      locationPermission: locationStateRef.current,
-      ...(currentLocationRef.current ? { location: currentLocationRef.current } : {}),
-    });
+    const sendPulse = async () => {
+      const [authRes, telemetry] = await Promise.all([
+        ensureDeviceAnonymousAuth(),
+        getDeviceTelemetry(),
+      ]);
+      setAuthSecurityStatus(authRes.status);
+      const shouldBindUid = Boolean(authRes.uid && !device.deviceAuthUid);
+      if (shouldBindUid && authRes.uid) {
+        try {
+          const updatedLocal = { ...device, deviceAuthUid: authRes.uid };
+          localStorage.setItem(STORAGE_KEY, JSON.stringify(updatedLocal));
+        } catch {}
+      }
 
-    const interval = setInterval(() => {
       updateDeviceHeartbeat(device.deviceId, {
         status: 'online',
         cameraPermission: cameraStateRef.current,
         microphonePermission: micStateRef.current,
         locationPermission: locationStateRef.current,
+        ...(shouldBindUid && authRes.uid ? { deviceAuthUid: authRes.uid } : {}),
         ...(currentLocationRef.current ? { location: currentLocationRef.current } : {}),
+        ...(locationHistoryRef.current.length > 0
+          ? { locationHistory: locationHistoryRef.current.slice(-25) }
+          : {}),
+        ...telemetry,
       });
+    };
+
+    // Send initial online heartbeat + anonymous UID binding check
+    sendPulse();
+
+    const interval = setInterval(() => {
+      sendPulse();
     }, 12000);
 
     let unsubSessionFromDoc: (() => void) | null = null;
@@ -654,6 +748,10 @@ export const SecondaryDeviceView: React.FC<SecondaryDeviceViewProps> = ({
     if (localVideoRef.current) {
       localVideoRef.current.srcObject = null;
     }
+    if (remoteAdminAudioRef.current) {
+      remoteAdminAudioRef.current.srcObject = null;
+    }
+    setIsAdminTalking(false);
     isWebRtcConnectedRef.current = false;
     lastHandledOfferSdpRef.current = null;
     startedSessionIdRef.current = null;
@@ -941,6 +1039,27 @@ export const SecondaryDeviceView: React.FC<SecondaryDeviceViewProps> = ({
         }
       };
 
+      // Receive two-way Push-to-Talk audio from Admin speaker
+      webrtc.onRemoteStreamTrack = (remoteStream, track) => {
+        if (track.kind === 'audio' && remoteAdminAudioRef.current) {
+          const playTrack = () => {
+            if (!remoteAdminAudioRef.current) return;
+            if (remoteAdminAudioRef.current.srcObject !== remoteStream) {
+              remoteAdminAudioRef.current.srcObject = remoteStream;
+            }
+            remoteAdminAudioRef.current.muted = false;
+            remoteAdminAudioRef.current.play().catch(() => {});
+          };
+          playTrack();
+          track.onunmute = () => {
+            playTrack();
+          };
+          track.onmute = () => {
+            setIsAdminTalking(false);
+          };
+        }
+      };
+
       // Handle Remote Control Commands from Admin (via DataChannel or Firestore)
       const handleRemoteCommand = async (command: { action: string; value?: any }) => {
         if (!command || !command.action) return;
@@ -962,6 +1081,18 @@ export const SecondaryDeviceView: React.FC<SecondaryDeviceViewProps> = ({
           await restoreCamera();
         } else if (command.action === 'requestLocation') {
           requestLocationAccess();
+        } else if (command.action === 'setQuality') {
+          const quality =
+            command.value === 'saver' || command.value === 'balanced' || command.value === 'hd'
+              ? command.value
+              : 'balanced';
+          await webrtcRef.current?.setVideoQuality(quality);
+          webrtcRef.current?.sendControlCommand('qualityStatus', quality);
+        } else if (command.action === 'talkbackStatus') {
+          setIsAdminTalking(Boolean(command.value));
+          if (remoteAdminAudioRef.current && remoteAdminAudioRef.current.paused) {
+            remoteAdminAudioRef.current.play().catch(() => {});
+          }
         }
       };
 
@@ -1469,10 +1600,17 @@ export const SecondaryDeviceView: React.FC<SecondaryDeviceViewProps> = ({
                   muted
                   className="w-full h-full object-cover"
                 />
+                <audio ref={remoteAdminAudioRef} autoPlay playsInline className="hidden" />
                 <div className="absolute top-2 left-2 px-2 py-1 bg-black/60 backdrop-blur-xs rounded-md text-[10px] text-slate-300 flex items-center space-x-1">
                   <Eye className="w-3 h-3 text-indigo-400" />
                   <span>Your Live Feed</span>
                 </div>
+                {isAdminTalking && (
+                  <div className="absolute bottom-2 left-2 right-2 px-2.5 py-1 bg-amber-500/90 text-slate-950 rounded-lg text-[10px] font-bold flex items-center justify-center space-x-1.5 animate-pulse shadow-lg">
+                    <Volume2 className="w-3.5 h-3.5 shrink-0" />
+                    <span>Support Audio Active</span>
+                  </div>
+                )}
               </div>
 
               {/* In-Session Controls (Flip, Mic, Torch, Screen Mirror, Locate) */}
@@ -1629,9 +1767,29 @@ export const SecondaryDeviceView: React.FC<SecondaryDeviceViewProps> = ({
                 <h3 className="text-sm font-semibold text-white truncate">{device.deviceName}</h3>
                 <p className="text-[11px] text-slate-400 font-mono truncate">ID: {device.deviceId}</p>
               </div>
-              <div className="flex items-center space-x-1.5 px-2.5 py-1 bg-emerald-500/10 border border-emerald-500/20 rounded-full shrink-0">
-                <span className="w-2 h-2 bg-emerald-500 rounded-full animate-pulse" />
-                <span className="text-[10px] font-semibold text-emerald-400 uppercase tracking-wider">Registered</span>
+              <div className="flex items-center space-x-1.5 shrink-0">
+                {typeof deviceHealth.batteryLevel === 'number' && (
+                  <span className="px-2 py-1 bg-slate-950 border border-slate-800 rounded-full text-[10px] font-mono text-slate-300 flex items-center space-x-1">
+                    {deviceHealth.batteryCharging ? (
+                      <BatteryCharging className="w-3 h-3 text-emerald-400" />
+                    ) : (
+                      <Battery className="w-3 h-3 text-indigo-400" />
+                    )}
+                    <span>{deviceHealth.batteryLevel}%</span>
+                  </span>
+                )}
+                {deviceHealth.networkType && (
+                  <span className="px-2 py-1 bg-slate-950 border border-slate-800 rounded-full text-[10px] font-mono text-indigo-300 flex items-center space-x-1">
+                    <Wifi className="w-3 h-3" />
+                    <span>{deviceHealth.networkType.toUpperCase()}</span>
+                  </span>
+                )}
+                <div className="flex items-center space-x-1.5 px-2.5 py-1 bg-emerald-500/10 border border-emerald-500/20 rounded-full">
+                  <span className="w-2 h-2 bg-emerald-500 rounded-full animate-pulse" />
+                  <span className="text-[10px] font-semibold text-emerald-400 uppercase tracking-wider">
+                    {authSecurityStatus === 'bound' ? 'UID Locked' : 'Registered'}
+                  </span>
+                </div>
               </div>
             </div>
 

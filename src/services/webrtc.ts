@@ -32,9 +32,46 @@ export const DEFAULT_STUN_TURN_SERVERS: RTCIceServer[] = [
   },
 ];
 
+export const CUSTOM_ICE_STORAGE_KEY = 'beampair_custom_ice_servers';
+
+export function getStoredCustomIceServers(): RTCIceServer[] {
+  if (typeof window === 'undefined') return [];
+  try {
+    const raw = localStorage.getItem(CUSTOM_ICE_STORAGE_KEY);
+    if (!raw) return [];
+    const parsed = JSON.parse(raw);
+    if (Array.isArray(parsed)) {
+      return parsed.filter((s) => s && s.urls);
+    }
+  } catch {}
+  return [];
+}
+
+export function saveCustomIceServers(servers: RTCIceServer[]): void {
+  if (typeof window === 'undefined') return;
+  try {
+    if (!servers || servers.length === 0) {
+      localStorage.removeItem(CUSTOM_ICE_STORAGE_KEY);
+    } else {
+      localStorage.setItem(CUSTOM_ICE_STORAGE_KEY, JSON.stringify(servers));
+    }
+  } catch {}
+}
+
 export async function fetchIceServers(): Promise<RTCIceServer[]> {
+  const customServers = getStoredCustomIceServers();
+  const dedupe = (list: RTCIceServer[]): RTCIceServer[] => {
+    const seen = new Set<string>();
+    return list.filter((srv) => {
+      const key = `${Array.isArray(srv.urls) ? srv.urls.join(',') : srv.urls}:${srv.username || ''}`;
+      if (seen.has(key)) return false;
+      seen.add(key);
+      return true;
+    });
+  };
+
   if (typeof window !== 'undefined' && window.location.hostname.endsWith('github.io')) {
-    return DEFAULT_STUN_TURN_SERVERS;
+    return dedupe([...customServers, ...DEFAULT_STUN_TURN_SERVERS]);
   }
   const controller = new AbortController();
   const timeoutId = setTimeout(() => controller.abort(), 1500);
@@ -43,14 +80,7 @@ export async function fetchIceServers(): Promise<RTCIceServer[]> {
     if (res.ok) {
       const data = await res.json();
       if (Array.isArray(data.iceServers) && data.iceServers.length > 0) {
-        const merged = [...data.iceServers, ...DEFAULT_STUN_TURN_SERVERS];
-        const seen = new Set<string>();
-        return merged.filter((srv) => {
-          const key = Array.isArray(srv.urls) ? srv.urls.join(',') : srv.urls;
-          if (seen.has(key)) return false;
-          seen.add(key);
-          return true;
-        });
+        return dedupe([...customServers, ...data.iceServers, ...DEFAULT_STUN_TURN_SERVERS]);
       }
     }
   } catch (err) {
@@ -58,7 +88,62 @@ export async function fetchIceServers(): Promise<RTCIceServer[]> {
   } finally {
     clearTimeout(timeoutId);
   }
-  return DEFAULT_STUN_TURN_SERVERS;
+  return dedupe([...customServers, ...DEFAULT_STUN_TURN_SERVERS]);
+}
+
+export async function testIceConnectivity(
+  servers?: RTCIceServer[]
+): Promise<{ hasHost: boolean; hasSrflx: boolean; hasRelay: boolean; rttMs: number }> {
+  const start = performance.now();
+  const iceServers = servers && servers.length > 0 ? servers : await fetchIceServers();
+  const pc = new RTCPeerConnection({ iceServers, iceCandidatePoolSize: 0 });
+  pc.createDataChannel('ice_probe');
+
+  let hasHost = false;
+  let hasSrflx = false;
+  let hasRelay = false;
+
+  return new Promise((resolve) => {
+    let settled = false;
+    const finish = () => {
+      if (settled) return;
+      settled = true;
+      try {
+        pc.close();
+      } catch {}
+      resolve({
+        hasHost,
+        hasSrflx,
+        hasRelay,
+        rttMs: Math.round(performance.now() - start),
+      });
+    };
+
+    const timer = setTimeout(finish, 3200);
+
+    pc.onicecandidate = (evt) => {
+      if (!evt.candidate) {
+        clearTimeout(timer);
+        finish();
+        return;
+      }
+      const cand = evt.candidate.candidate || '';
+      if (cand.includes(' typ host')) hasHost = true;
+      if (cand.includes(' typ srflx')) hasSrflx = true;
+      if (cand.includes(' typ relay')) hasRelay = true;
+      if (hasSrflx && hasRelay) {
+        clearTimeout(timer);
+        finish();
+      }
+    };
+
+    pc.createOffer()
+      .then((offer) => pc.setLocalDescription(offer))
+      .catch(() => {
+        clearTimeout(timer);
+        finish();
+      });
+  });
 }
 
 export class WebRTCManager {
@@ -89,6 +174,8 @@ export class WebRTCManager {
 
   private lastStatsBytes = 0;
   private lastStatsTime = 0;
+  private talkbackTrack: MediaStreamTrack | null = null;
+  public currentQuality: 'saver' | 'balanced' | 'hd' = 'balanced';
 
   private preferHardwareVideoCodecs(transceiver: RTCRtpTransceiver): void {
     try {
@@ -143,7 +230,7 @@ export class WebRTCManager {
       }
     };
 
-    // Track handling: configure ultra-low-latency receiver playout and deliver stream to Admin UI
+    // Track handling: configure ultra-low-latency receiver playout and deliver stream to Admin/Phone UI
     this.peerConnection.ontrack = (event) => {
       if (event.receiver) {
         try {
@@ -174,7 +261,7 @@ export class WebRTCManager {
       }
     };
 
-    // Setup RTCDataChannel for instantaneous remote control commands (camera flip, torch, mute)
+    // Setup RTCDataChannel for instantaneous remote control commands (camera flip, torch, mute, quality, talkback)
     if (role === 'admin') {
       try {
         const dc = this.peerConnection.createDataChannel('support_control', {
@@ -185,11 +272,11 @@ export class WebRTCManager {
         console.warn('DataChannel create warning:', err);
       }
 
-      // Add transceivers for receiving video and audio from secondary device
+      // Add transceivers: recvonly video + sendrecv audio (supports instant Push-to-Talk without renegotiation)
       try {
         const videoTransceiver = this.peerConnection.addTransceiver('video', { direction: 'recvonly' });
         this.preferHardwareVideoCodecs(videoTransceiver);
-        this.peerConnection.addTransceiver('audio', { direction: 'recvonly' });
+        this.peerConnection.addTransceiver('audio', { direction: 'sendrecv' });
       } catch (err) {
         console.warn('Transceiver add warning:', err);
       }
@@ -616,21 +703,105 @@ export class WebRTCManager {
     return screenTrack;
   }
 
+  private getQualityProfile(quality: 'saver' | 'balanced' | 'hd') {
+    if (quality === 'saver') {
+      return { width: 640, height: 360, frameRate: 24, maxBitrate: 320_000, scaleDown: 1.5 };
+    }
+    if (quality === 'hd') {
+      return { width: 1280, height: 720, frameRate: 30, maxBitrate: 1_400_000, scaleDown: 1 };
+    }
+    return { width: 854, height: 480, frameRate: 30, maxBitrate: 650_000, scaleDown: 1 };
+  }
+
   private async tuneVideoSenderParameters(sender: RTCRtpSender): Promise<void> {
+    const profile = this.getQualityProfile(this.currentQuality);
     try {
       const params = sender.getParameters();
       if (!params.encodings || params.encodings.length === 0) {
         params.encodings = [{}];
       }
       params.degradationPreference = 'maintain-framerate';
-      params.encodings[0].maxBitrate = 650_000;
-      params.encodings[0].maxFramerate = 30;
+      params.encodings[0].maxBitrate = profile.maxBitrate;
+      params.encodings[0].maxFramerate = profile.frameRate;
+      if ('scaleResolutionDownBy' in params.encodings[0]) {
+        params.encodings[0].scaleResolutionDownBy = profile.scaleDown;
+      }
       if ('networkPriority' in params.encodings[0]) {
         (params.encodings[0] as any).networkPriority = 'high';
       }
       await sender.setParameters(params);
     } catch {
       // Some mobile WebViews restrict sender.setParameters; ignore safely
+    }
+  }
+
+  async setVideoQuality(quality: 'saver' | 'balanced' | 'hd'): Promise<void> {
+    this.currentQuality = quality;
+    const profile = this.getQualityProfile(quality);
+
+    if (this.currentVideoTrack && !this.isScreenSharingActive) {
+      try {
+        await this.currentVideoTrack.applyConstraints({
+          width: { ideal: profile.width, max: Math.max(profile.width, 960) },
+          height: { ideal: profile.height, max: Math.max(profile.height, 720) },
+          frameRate: { ideal: profile.frameRate, max: 30 },
+        });
+      } catch {}
+    }
+
+    if (this.peerConnection) {
+      const sender = this.peerConnection
+        .getSenders()
+        .find((s) => s.track && s.track.kind === 'video');
+      if (sender) {
+        await this.tuneVideoSenderParameters(sender);
+      }
+    }
+  }
+
+  // Two-Way Push-to-Talk Audio (Admin mic -> Phone speaker)
+  async startTalkback(): Promise<MediaStreamTrack> {
+    if (!this.peerConnection) throw new Error('PeerConnection not initialized');
+    this.stopTalkback();
+
+    const stream = await navigator.mediaDevices.getUserMedia({
+      audio: {
+        echoCancellation: true,
+        noiseSuppression: true,
+        autoGainControl: true,
+      },
+      video: false,
+    });
+    const track = stream.getAudioTracks()[0];
+    this.talkbackTrack = track;
+
+    const audioTransceiver = this.peerConnection.getTransceivers().find((t) => {
+      return t.receiver?.track?.kind === 'audio' || t.sender?.track?.kind === 'audio';
+    });
+
+    if (audioTransceiver) {
+      audioTransceiver.direction = 'sendrecv';
+      await audioTransceiver.sender.replaceTrack(track);
+    }
+    return track;
+  }
+
+  async stopTalkback(): Promise<void> {
+    if (this.peerConnection) {
+      const audioTransceiver = this.peerConnection.getTransceivers().find((t) => {
+        return t.receiver?.track?.kind === 'audio' || t.sender?.track?.kind === 'audio';
+      });
+      if (audioTransceiver?.sender) {
+        try {
+          await audioTransceiver.sender.replaceTrack(null);
+        } catch {}
+      }
+    }
+    if (this.talkbackTrack) {
+      try {
+        this.talkbackTrack.stop();
+      } catch {}
+      this.talkbackTrack = null;
     }
   }
 
@@ -653,7 +824,6 @@ export class WebRTCManager {
               (t.sender as any).setStreams(this.localStream);
             }
           } catch {}
-          // Skip duplicate replaceTrack if this exact track is already bound
           if (t.sender?.track?.id !== videoTrack.id) {
             ops.push(
               t.sender
@@ -666,8 +836,9 @@ export class WebRTCManager {
           t.direction = 'inactive';
         }
       } else if (kind === 'audio') {
+        // Keep sendrecv so phone sends mic AND receives Admin Push-to-Talk audio seamlessly
+        t.direction = audioTrack ? 'sendrecv' : 'recvonly';
         if (audioTrack) {
-          t.direction = 'sendonly';
           try {
             if (typeof (t.sender as any).setStreams === 'function') {
               (t.sender as any).setStreams(this.localStream);
@@ -680,8 +851,6 @@ export class WebRTCManager {
                 .catch((err) => console.warn('Audio bind replaceTrack warning:', err))
             );
           }
-        } else {
-          t.direction = 'inactive';
         }
       }
     });
@@ -921,6 +1090,12 @@ export class WebRTCManager {
 
     this.localStream.getTracks().forEach((track) => track.stop());
     this.remoteStream.getTracks().forEach((track) => track.stop());
+    if (this.talkbackTrack) {
+      try {
+        this.talkbackTrack.stop();
+      } catch {}
+      this.talkbackTrack = null;
+    }
     this.localStream = new MediaStream();
     this.remoteStream = new MediaStream();
 

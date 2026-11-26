@@ -38,6 +38,11 @@ import {
   LocateFixed,
   Compass,
   Camera,
+  Battery,
+  BatteryCharging,
+  Wifi,
+  Lock,
+  Terminal,
 } from 'lucide-react';
 import { Device, Session, SecurityAuditLog } from '../types';
 import { auth, BOOTSTRAP_ADMIN_EMAIL } from '../firebase/config';
@@ -54,7 +59,12 @@ import {
 import { PairingModal } from './PairingModal';
 import { AdminLiveStreamModal } from './AdminLiveStreamModal';
 import { DeviceMapViewer } from './DeviceMapViewer';
-import { fetchIceServers } from '../services/webrtc';
+import {
+  fetchIceServers,
+  getStoredCustomIceServers,
+  saveCustomIceServers,
+  testIceConnectivity,
+} from '../services/webrtc';
 import QRCode from 'qrcode';
 import { generatePairingToken } from '../services/pairingService';
 import { createRemoteSession, recordSecurityAudit, sendSessionRemoteCommand, terminateSession } from '../services/signaling';
@@ -109,9 +119,30 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
   // Device details modal
   const [deviceDetails, setDeviceDetails] = useState<Device | null>(null);
 
-  // STUN/TURN test state
+  // STUN/TURN config & live probe state
   const [iceServers, setIceServers] = useState<any[]>([]);
   const [copiedId, setCopiedId] = useState<string | null>(null);
+  const [customTurnUrl, setCustomTurnUrl] = useState<string>(() => {
+    const existing = getStoredCustomIceServers();
+    if (!existing.length) return '';
+    return Array.isArray(existing[0].urls) ? existing[0].urls[0] || '' : String(existing[0].urls || '');
+  });
+  const [customTurnUser, setCustomTurnUser] = useState<string>(() => {
+    const existing = getStoredCustomIceServers();
+    return existing[0]?.username || '';
+  });
+  const [customTurnPass, setCustomTurnPass] = useState<string>(() => {
+    const existing = getStoredCustomIceServers();
+    return typeof existing[0]?.credential === 'string' ? existing[0].credential : '';
+  });
+  const [turnSavedFeedback, setTurnSavedFeedback] = useState<string | null>(null);
+  const [iceTestRunning, setIceTestRunning] = useState<boolean>(false);
+  const [iceTestResult, setIceTestResult] = useState<{
+    hasHost: boolean;
+    hasSrflx: boolean;
+    hasRelay: boolean;
+    rttMs: number;
+  } | null>(null);
 
   // Embedded Pairing Tab state
   const [embedToken, setEmbedToken] = useState<string>('');
@@ -986,11 +1017,39 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
                             <span>Platform:</span>
                             <span className="text-slate-300 font-medium">{device.platform.toUpperCase()}</span>
                           </div>
+                          {(typeof device.batteryLevel === 'number' || device.networkType || device.deviceAuthUid) && (
+                            <div className="flex justify-between items-center">
+                              <span>Health &amp; Security:</span>
+                              <span className="flex items-center space-x-2 font-mono text-[10px]">
+                                {typeof device.batteryLevel === 'number' && (
+                                  <span className={`inline-flex items-center space-x-0.5 ${device.batteryLevel <= 20 && !device.batteryCharging ? 'text-rose-400' : 'text-emerald-400'}`}>
+                                    {device.batteryCharging ? <BatteryCharging className="w-3 h-3" /> : <Battery className="w-3 h-3" />}
+                                    <span>{device.batteryLevel}%</span>
+                                  </span>
+                                )}
+                                {device.networkType && (
+                                  <span className="inline-flex items-center space-x-0.5 text-indigo-300">
+                                    <Wifi className="w-3 h-3" />
+                                    <span>{device.networkType.toUpperCase()}</span>
+                                  </span>
+                                )}
+                                {device.deviceAuthUid && (
+                                  <span className="inline-flex items-center space-x-0.5 text-emerald-400" title="Anonymous Auth UID Bound">
+                                    <Lock className="w-3 h-3" />
+                                    <span>UID</span>
+                                  </span>
+                                )}
+                              </span>
+                            </div>
+                          )}
                           {device.location && (
                             <div className="flex justify-between">
                               <span>GPS Coordinates:</span>
                               <span className="text-emerald-400 font-mono text-[10px]">
                                 {device.location.latitude.toFixed(5)}, {device.location.longitude.toFixed(5)}
+                                {device.locationHistory && device.locationHistory.length > 0
+                                  ? ` (${device.locationHistory.length} pts)`
+                                  : ''}
                               </span>
                             </div>
                           )}
@@ -1692,17 +1751,145 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
         {/* ============================================================ */}
         {activeTab === 'settings' && (
           <div className="space-y-6 animate-fade-in">
+            {/* 1. Dedicated Low-Latency STUN / TURN Traversal & Live Tester */}
             <div className="bg-slate-900/90 border border-slate-800 rounded-2xl p-4 sm:p-6 shadow-xl space-y-6">
-              <div>
-                <h3 className="text-base font-semibold text-white">WebRTC Network Traversal &amp; STUN/TURN</h3>
-                <p className="text-xs text-slate-400 mt-1">
-                  Active ICE servers used for establishing P2P and TURN relay connectivity across cellular and restricted Wi-Fi networks.
-                </p>
+              <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
+                <div>
+                  <h3 className="text-base font-semibold text-white">Dedicated TURN &amp; WebRTC Network Traversal</h3>
+                  <p className="text-xs text-slate-400 mt-1">
+                    Configure private TURN relays for near-zero cellular/strict-NAT latency and test live candidate gathering.
+                  </p>
+                </div>
+                <button
+                  type="button"
+                  disabled={iceTestRunning}
+                  onClick={async () => {
+                    setIceTestRunning(true);
+                    try {
+                      const res = await testIceConnectivity();
+                      setIceTestResult(res);
+                    } finally {
+                      setIceTestRunning(false);
+                    }
+                  }}
+                  className="px-4 py-2 bg-indigo-600 hover:bg-indigo-500 disabled:opacity-50 text-white text-xs font-semibold rounded-xl flex items-center justify-center space-x-2 transition cursor-pointer shrink-0 shadow-md shadow-indigo-600/20"
+                >
+                  <RefreshCw className={`w-3.5 h-3.5 ${iceTestRunning ? 'animate-spin' : ''}`} />
+                  <span>{iceTestRunning ? 'Probing Relays...' : 'Test STUN/TURN Live'}</span>
+                </button>
+              </div>
+
+              {iceTestResult && (
+                <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
+                  <div className="p-3 bg-slate-950 border border-slate-800 rounded-xl flex items-center justify-between">
+                    <span className="text-[11px] text-slate-400">Local Host</span>
+                    <span className={`text-[10px] font-mono font-bold px-2 py-0.5 rounded ${iceTestResult.hasHost ? 'bg-emerald-500/15 text-emerald-400' : 'bg-rose-500/15 text-rose-400'}`}>
+                      {iceTestResult.hasHost ? 'PASS' : 'NONE'}
+                    </span>
+                  </div>
+                  <div className="p-3 bg-slate-950 border border-slate-800 rounded-xl flex items-center justify-between">
+                    <span className="text-[11px] text-slate-400">STUN (srflx)</span>
+                    <span className={`text-[10px] font-mono font-bold px-2 py-0.5 rounded ${iceTestResult.hasSrflx ? 'bg-emerald-500/15 text-emerald-400' : 'bg-amber-500/15 text-amber-400'}`}>
+                      {iceTestResult.hasSrflx ? 'PASS' : 'BLOCKED'}
+                    </span>
+                  </div>
+                  <div className="p-3 bg-slate-950 border border-slate-800 rounded-xl flex items-center justify-between">
+                    <span className="text-[11px] text-slate-400">TURN (relay)</span>
+                    <span className={`text-[10px] font-mono font-bold px-2 py-0.5 rounded ${iceTestResult.hasRelay ? 'bg-emerald-500/15 text-emerald-400' : 'bg-rose-500/15 text-rose-400'}`}>
+                      {iceTestResult.hasRelay ? 'PASS' : 'FAILED'}
+                    </span>
+                  </div>
+                  <div className="p-3 bg-slate-950 border border-slate-800 rounded-xl flex items-center justify-between">
+                    <span className="text-[11px] text-slate-400">Probe Time</span>
+                    <span className="text-[11px] font-mono font-bold text-indigo-300">
+                      {iceTestResult.rttMs} ms
+                    </span>
+                  </div>
+                </div>
+              )}
+
+              {/* Custom Browser TURN Relay Form (ideal for GitHub Pages or custom Coturn/Metered relays) */}
+              <div className="p-4 bg-slate-950/70 border border-slate-800 rounded-xl space-y-3">
+                <div className="flex items-center justify-between">
+                  <span className="text-xs font-semibold text-white">Custom Dedicated TURN Relay (Client Override)</span>
+                  <span className="text-[10px] text-slate-400 font-mono">Works on GitHub Pages &amp; Server</span>
+                </div>
+                <div className="grid grid-cols-1 md:grid-cols-3 gap-2.5">
+                  <input
+                    type="text"
+                    placeholder="turn:relay.yourdomain.com:3478"
+                    value={customTurnUrl}
+                    onChange={(e) => setCustomTurnUrl(e.target.value)}
+                    className="px-3 py-2 bg-slate-900 border border-slate-800 rounded-xl text-xs font-mono text-slate-200 focus:border-indigo-500 focus:outline-hidden"
+                  />
+                  <input
+                    type="text"
+                    placeholder="TURN Username"
+                    value={customTurnUser}
+                    onChange={(e) => setCustomTurnUser(e.target.value)}
+                    className="px-3 py-2 bg-slate-900 border border-slate-800 rounded-xl text-xs font-mono text-slate-200 focus:border-indigo-500 focus:outline-hidden"
+                  />
+                  <input
+                    type="password"
+                    placeholder="TURN Password / Credential"
+                    value={customTurnPass}
+                    onChange={(e) => setCustomTurnPass(e.target.value)}
+                    className="px-3 py-2 bg-slate-900 border border-slate-800 rounded-xl text-xs font-mono text-slate-200 focus:border-indigo-500 focus:outline-hidden"
+                  />
+                </div>
+                <div className="flex flex-wrap items-center justify-between gap-2 pt-1">
+                  <p className="text-[11px] text-slate-400">
+                    On backend hosts, set <code className="text-indigo-300">METERED_APP_NAME</code> + <code className="text-indigo-300">METERED_API_KEY</code> or <code className="text-indigo-300">TURN_URL</code> in env vars.
+                  </p>
+                  <div className="flex items-center space-x-2">
+                    <button
+                      type="button"
+                      onClick={async () => {
+                        setCustomTurnUrl('');
+                        setCustomTurnUser('');
+                        setCustomTurnPass('');
+                        saveCustomIceServers([]);
+                        setIceServers(await fetchIceServers());
+                        setTurnSavedFeedback('Reset to default relays');
+                        setTimeout(() => setTurnSavedFeedback(null), 2500);
+                      }}
+                      className="px-3 py-1.5 bg-slate-800 hover:bg-slate-700 text-slate-300 text-[11px] rounded-lg transition cursor-pointer"
+                    >
+                      Clear
+                    </button>
+                    <button
+                      type="button"
+                      onClick={async () => {
+                        if (customTurnUrl.trim()) {
+                          saveCustomIceServers([
+                            {
+                              urls: customTurnUrl.trim(),
+                              ...(customTurnUser.trim() ? { username: customTurnUser.trim() } : {}),
+                              ...(customTurnPass.trim() ? { credential: customTurnPass.trim() } : {}),
+                            },
+                          ]);
+                          setTurnSavedFeedback('Saved custom TURN relay');
+                        } else {
+                          saveCustomIceServers([]);
+                          setTurnSavedFeedback('Saved default relays');
+                        }
+                        setIceServers(await fetchIceServers());
+                        setTimeout(() => setTurnSavedFeedback(null), 2500);
+                      }}
+                      className="px-3.5 py-1.5 bg-emerald-600 hover:bg-emerald-500 text-white text-[11px] font-semibold rounded-lg transition cursor-pointer"
+                    >
+                      Save TURN Config
+                    </button>
+                  </div>
+                </div>
+                {turnSavedFeedback && (
+                  <p className="text-[11px] text-emerald-400 font-medium">{turnSavedFeedback}</p>
+                )}
               </div>
 
               <div className="space-y-2">
                 <span className="text-xs font-medium text-slate-400 uppercase tracking-wider">
-                  Configured ICE Servers
+                  Active ICE Servers ({iceServers.length})
                 </span>
                 <div className="bg-slate-950 border border-slate-800 rounded-xl p-3 sm:p-4 font-mono text-xs text-slate-300 space-y-2">
                   {iceServers.map((server, idx) => (
@@ -1717,17 +1904,55 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
                   ))}
                 </div>
               </div>
+            </div>
 
-              {/* Security & Data Retention Notice */}
-              <div className="p-4 bg-slate-950/70 border border-slate-800 rounded-xl space-y-3 text-xs">
-                <h4 className="font-semibold text-white flex items-center space-x-1.5">
-                  <ShieldCheck className="w-4 h-4 text-emerald-400" />
-                  <span>Privacy & Zero-Storage Architecture</span>
+            {/* 2. Security Hardening & Anonymous Device UID Binding */}
+            <div className="bg-slate-900/90 border border-slate-800 rounded-2xl p-4 sm:p-6 shadow-xl space-y-3 text-xs">
+              <div className="flex items-center justify-between">
+                <h4 className="text-sm font-semibold text-white flex items-center space-x-2">
+                  <Lock className="w-4 h-4 text-emerald-400" />
+                  <span>Security Hardening: Anonymous Device Auth &amp; Hardened Rules</span>
                 </h4>
-                <p className="text-slate-400 leading-relaxed text-[11px]">
-                  BeamPair transmits video, audio, and screen feeds directly between peers via end-to-end encrypted WebRTC channels (DTLS/SRTP). No video recordings, audio transcripts, or phone contents are ever stored on cloud servers.
-                </p>
+                <span className="px-2 py-0.5 bg-emerald-500/15 border border-emerald-500/30 text-emerald-400 text-[10px] font-mono rounded-md">
+                  UID-Bound Rules Deployed
+                </span>
               </div>
+              <p className="text-slate-400 leading-relaxed text-[11px]">
+                Paired phones sign in silently via Firebase Anonymous Authentication and lock their <code className="text-slate-200">deviceAuthUid</code> to their Firestore record so only that phone or your Admin account can modify its status or GPS history. Enable <strong className="text-slate-200">Anonymous</strong> inside <strong className="text-slate-200">Firebase Console &rarr; Authentication &rarr; Sign-in method</strong> to activate UID enforcement.
+              </p>
+            </div>
+
+            {/* 3. Native Android APK Wrapper (Capacitor Foreground Service) */}
+            <div className="bg-slate-900/90 border border-slate-800 rounded-2xl p-4 sm:p-6 shadow-xl space-y-4">
+              <div className="flex items-center justify-between">
+                <h4 className="text-sm font-semibold text-white flex items-center space-x-2">
+                  <Terminal className="w-4 h-4 text-indigo-400" />
+                  <span>Native Android APK Wrapper (Background Camera &amp; GPS)</span>
+                </h4>
+                <span className="px-2 py-0.5 bg-indigo-500/15 border border-indigo-500/30 text-indigo-300 text-[10px] font-mono rounded-md">
+                  Capacitor Template Included
+                </span>
+              </div>
+              <p className="text-xs text-slate-400 leading-relaxed">
+                Mobile Chrome enforces OS camera suspension when minimized. Package this app as a native Android APK with the included <code className="text-indigo-300">capacitor.config.json</code> and <code className="text-indigo-300">android-native-template/AndroidManifest.xml</code> foreground service permissions (<code className="text-slate-300">camera</code>, <code className="text-slate-300">microphone</code>, <code className="text-slate-300">location</code>) for true background streaming:
+              </p>
+              <div className="bg-slate-950 border border-slate-800 rounded-xl p-3 font-mono text-[11px] text-emerald-300 space-y-1 overflow-x-auto">
+                <div>npm install @capacitor/core @capacitor/cli @capacitor/android</div>
+                <div>npm run build &amp;&amp; npx cap add android</div>
+                <div>cp android-native-template/AndroidManifest.xml android/app/src/main/AndroidManifest.xml</div>
+                <div>npx cap sync android &amp;&amp; npx cap open android</div>
+              </div>
+            </div>
+
+            {/* 4. Privacy & Zero-Storage Architecture */}
+            <div className="bg-slate-900/90 border border-slate-800 rounded-2xl p-4 sm:p-6 shadow-xl space-y-3 text-xs">
+              <h4 className="font-semibold text-white flex items-center space-x-1.5">
+                <ShieldCheck className="w-4 h-4 text-emerald-400" />
+                <span>Privacy &amp; Zero-Storage Architecture</span>
+              </h4>
+              <p className="text-slate-400 leading-relaxed text-[11px]">
+                BeamPair transmits video, audio, and screen feeds directly between peers via end-to-end encrypted WebRTC channels (DTLS/SRTP). Recordings and snapshots are processed locally in your browser and never stored on cloud servers.
+              </p>
             </div>
           </div>
         )}

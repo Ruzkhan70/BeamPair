@@ -85,10 +85,10 @@ export default function App() {
     }
   }, []);
 
-  // Listen to Firebase Auth state
+  // Listen to Firebase Auth state (ignore anonymous device sessions in Admin UI)
   useEffect(() => {
     const unsubscribe = onAuthStateChanged(auth, (user) => {
-      if (user) {
+      if (user && !user.isAnonymous) {
         setAdminUser({
           uid: user.uid,
           email: user.email || '',

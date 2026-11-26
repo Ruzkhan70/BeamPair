@@ -1,0 +1,14 @@
+{
+  "appId": "com.beampair.remoteclient",
+  "appName": "BeamPair",
+  "webDir": "dist",
+  "bundledWebRuntime": false,
+  "android": {
+    "allowMixedContent": false,
+    "captureInput": true,
+    "webContentsDebuggingEnabled": false
+  },
+  "server": {
+    "androidScheme": "https"
+  }
+}

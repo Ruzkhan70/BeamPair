@@ -26,38 +26,78 @@ interface ServerToken {
 
 const pairingTokens = new Map<string, ServerToken>();
 
-// Dynamic STUN and TURN server configuration
-const ICE_SERVERS: RTCIceServer[] = [
+// Dynamic STUN and TURN server configuration with Metered.ca & custom TURN env support
+const BASE_STUN_SERVERS: RTCIceServer[] = [
   { urls: 'stun:stun.l.google.com:19302' },
   { urls: 'stun:stun.cloudflare.com:3478' },
-  // If custom TURN credentials are provided in environment:
-  ...(process.env.TURN_URL
-    ? [
+];
+
+const FALLBACK_OPEN_RELAY: RTCIceServer[] = [
+  {
+    urls: 'turn:openrelay.metered.ca:80',
+    username: 'openrelayproject',
+    credential: 'openrelayproject',
+  },
+  {
+    urls: 'turn:openrelay.metered.ca:443',
+    username: 'openrelayproject',
+    credential: 'openrelayproject',
+  },
+  {
+    urls: 'turn:openrelay.metered.ca:443?transport=tcp',
+    username: 'openrelayproject',
+    credential: 'openrelayproject',
+  },
+];
+
+let cachedMeteredIce: { servers: RTCIceServer[]; expiresAt: number } | null = null;
+
+async function resolveIceServers(): Promise<{ iceServers: RTCIceServer[]; provider: string }> {
+  const meteredApp = (process.env.METERED_APP_NAME || '').trim();
+  const meteredKey = (process.env.METERED_API_KEY || '').trim();
+
+  if (meteredApp && meteredKey) {
+    if (cachedMeteredIce && Date.now() < cachedMeteredIce.expiresAt) {
+      return { iceServers: cachedMeteredIce.servers, provider: 'metered-dedicated' };
+    }
+    try {
+      const controller = new AbortController();
+      const timer = setTimeout(() => controller.abort(), 2500);
+      const url = `https://${encodeURIComponent(meteredApp)}.metered.live/api/v1/turn/credentials?apiKey=${encodeURIComponent(meteredKey)}`;
+      const resp = await fetch(url, { signal: controller.signal });
+      clearTimeout(timer);
+      if (resp.ok) {
+        const turnList = (await resp.json()) as RTCIceServer[];
+        if (Array.isArray(turnList) && turnList.length > 0) {
+          const combined = [...BASE_STUN_SERVERS, ...turnList];
+          cachedMeteredIce = { servers: combined, expiresAt: Date.now() + 10 * 60 * 1000 };
+          return { iceServers: combined, provider: 'metered-dedicated' };
+        }
+      }
+    } catch (err) {
+      console.warn('[WebRTC] Metered TURN fetch warning:', err);
+    }
+  }
+
+  if (process.env.TURN_URL && process.env.TURN_URL.trim()) {
+    return {
+      iceServers: [
+        ...BASE_STUN_SERVERS,
         {
-          urls: [process.env.TURN_URL],
+          urls: process.env.TURN_URL.split(',').map((u) => u.trim()).filter(Boolean),
           username: process.env.TURN_USERNAME || '',
           credential: process.env.TURN_PASSWORD || '',
         },
-      ]
-    : [
-        // Public open relay TURN for testing environments (openrelay.metered.ca fallback)
-        {
-          urls: 'turn:openrelay.metered.ca:80',
-          username: 'openrelayproject',
-          credential: 'openrelayproject',
-        },
-        {
-          urls: 'turn:openrelay.metered.ca:443',
-          username: 'openrelayproject',
-          credential: 'openrelayproject',
-        },
-        {
-          urls: 'turn:openrelay.metered.ca:443?transport=tcp',
-          username: 'openrelayproject',
-          credential: 'openrelayproject',
-        },
-      ]),
-];
+      ],
+      provider: 'custom-turn',
+    };
+  }
+
+  return {
+    iceServers: [...BASE_STUN_SERVERS, ...FALLBACK_OPEN_RELAY],
+    provider: 'public-fallback',
+  };
+}
 
 // Security Audit Event Logger
 function logSecurityEvent(type: string, details: Record<string, unknown>, req?: Request) {
@@ -248,10 +288,9 @@ app.post('/api/admin/revoke-device', (req: Request, res: Response) => {
 });
 
 // 6. WebRTC ICE Configuration Endpoint
-app.get('/api/webrtc/ice-servers', (_req: Request, res: Response) => {
-  res.json({
-    iceServers: ICE_SERVERS,
-  });
+app.get('/api/webrtc/ice-servers', async (_req: Request, res: Response) => {
+  const result = await resolveIceServers();
+  res.json(result);
 });
 
 // 7. Check if the public Shared App URL (ais-pre) is published/live or still 404

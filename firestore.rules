@@ -85,19 +85,27 @@ service cloud.firestore {
       allow get: if isValidId(deviceId);
       allow list: if isAdmin() && resource.data.adminId == request.auth.uid;
 
-      // Create: When a device is paired
+      // Create: When a device is paired (optionally binding Anonymous Auth deviceAuthUid)
       allow create: if isValidId(deviceId) &&
         incoming().keys().hasAll(['deviceId', 'adminId', 'deviceName', 'status', 'isRevoked', 'pairedAt']) &&
-        incoming().keys().hasOnly(['deviceId', 'adminId', 'deviceName', 'status', 'isRevoked', 'pairedAt', 'deviceModel', 'platform', 'cameraPermission', 'microphonePermission', 'screenShareSupported', 'locationPermission', 'location', 'lastSeen', 'currentSessionId']) &&
+        incoming().keys().hasOnly([
+          'deviceId', 'adminId', 'deviceAuthUid', 'deviceName', 'status', 'isRevoked', 'pairedAt',
+          'deviceModel', 'platform', 'cameraPermission', 'microphonePermission',
+          'screenShareSupported', 'locationPermission', 'location', 'locationHistory',
+          'lastSeen', 'currentSessionId', 'batteryLevel', 'batteryCharging', 'networkType'
+        ]) &&
         incoming().deviceId == deviceId &&
         incoming().deviceId.size() <= 128 &&
         incoming().adminId is string && incoming().adminId.size() <= 128 &&
+        (!('deviceAuthUid' in incoming()) || (isSignedIn() && incoming().deviceAuthUid is string && incoming().deviceAuthUid.size() <= 128 && incoming().deviceAuthUid == request.auth.uid)) &&
         incoming().deviceName is string && incoming().deviceName.size() <= 100 &&
         incoming().status in ['online', 'offline'] &&
         incoming().isRevoked == false &&
-        incoming().pairedAt is number;
+        incoming().pairedAt is number &&
+        (!('locationHistory' in incoming()) || (incoming().locationHistory is list && incoming().locationHistory.size() <= 25)) &&
+        (!('networkType' in incoming()) || incoming().networkType == null || (incoming().networkType is string && incoming().networkType.size() <= 32));
 
-      // Update: Admin revokes or updates device, or Device updates heartbeat / permissions / status
+      // Update: Admin revokes or updates device, or authorized Device updates heartbeat / telemetry / GPS
       allow update: if (
         // Action: Admin revoking or editing device name or session
         (isAdmin() && existing().adminId == request.auth.uid &&
@@ -106,16 +114,24 @@ service cloud.firestore {
           incoming().pairedAt == existing().pairedAt &&
           incoming().diff(existing()).affectedKeys().hasOnly(['isRevoked', 'deviceName', 'status', 'lastSeen', 'currentSessionId', 'locationPingRequestedAt']))
         ||
-        // Action: Secondary Device updating status, heartbeat, permissions, location (ONLY if not revoked)
+        // Action: Secondary Device updating status, heartbeat, permissions, location, telemetry (ONLY if not revoked & matches bound deviceAuthUid)
         (existing().isRevoked == false &&
           incoming().adminId == existing().adminId &&
           incoming().deviceId == existing().deviceId &&
           incoming().isRevoked == existing().isRevoked &&
           incoming().pairedAt == existing().pairedAt &&
+          (!('deviceAuthUid' in existing()) || (isSignedIn() && existing().deviceAuthUid == request.auth.uid && incoming().deviceAuthUid == existing().deviceAuthUid)) &&
+          ( !('deviceAuthUid' in incoming()) ||
+            ('deviceAuthUid' in existing() && incoming().deviceAuthUid == existing().deviceAuthUid) ||
+            (!('deviceAuthUid' in existing()) && isSignedIn() && incoming().deviceAuthUid is string && incoming().deviceAuthUid.size() <= 128 && incoming().deviceAuthUid == request.auth.uid)
+          ) &&
+          (!('locationHistory' in incoming()) || (incoming().locationHistory is list && incoming().locationHistory.size() <= 25)) &&
+          (!('networkType' in incoming()) || incoming().networkType == null || (incoming().networkType is string && incoming().networkType.size() <= 32)) &&
           incoming().diff(existing()).affectedKeys().hasOnly([
             'status', 'lastSeen', 'cameraPermission', 'microphonePermission',
             'screenShareSupported', 'deviceModel', 'platform', 'currentSessionId',
-            'locationPermission', 'location'
+            'locationPermission', 'location', 'locationHistory',
+            'batteryLevel', 'batteryCharging', 'networkType', 'deviceAuthUid'
           ]))
       );
 
@@ -149,11 +165,13 @@ service cloud.firestore {
             'requestCamera', 'requestMicrophone', 'requestScreen', 'cameraFacing', 'remoteCommand'
           ]))
         ||
-        // Device actions: answer SDP, connecting/active state, torch/screen state, end session
+        // Device actions: answer SDP, connecting/active state, torch/screen state, end session (verified via deviceAuthUid when bound)
         (incoming().adminId == existing().adminId &&
           incoming().sessionId == existing().sessionId &&
           incoming().deviceId == existing().deviceId &&
           incoming().startedAt == existing().startedAt &&
+          (!('deviceAuthUid' in get(/databases/$(database)/documents/devices/$(existing().deviceId)).data) ||
+           (isSignedIn() && get(/databases/$(database)/documents/devices/$(existing().deviceId)).data.deviceAuthUid == request.auth.uid)) &&
           incoming().diff(existing()).affectedKeys().hasOnly([
             'status', 'sdpAnswer', 'endedAt', 'endedBy', 'terminationReason',
             'remoteCommand', 'liveFrame', 'lastFrameAt', 'isTorchOn', 'isScreenSharing'
@@ -171,7 +189,13 @@ service cloud.firestore {
           incoming().keys().hasAll(['candidate', 'sender', 'createdAt']) &&
           incoming().candidate is string && incoming().candidate.size() <= 4096 &&
           incoming().sender in ['admin', 'device'] &&
-          incoming().createdAt is number;
+          incoming().createdAt is number &&
+          (
+            (incoming().sender == 'admin' && isAdmin()) ||
+            (incoming().sender == 'device' &&
+              (!('deviceAuthUid' in get(/databases/$(database)/documents/devices/$(get(/databases/$(database)/documents/sessions/$(sessionId)).data.deviceId)).data) ||
+               (isSignedIn() && get(/databases/$(database)/documents/devices/$(get(/databases/$(database)/documents/sessions/$(sessionId)).data.deviceId)).data.deviceAuthUid == request.auth.uid)))
+          );
 
         allow update: if false;
         allow delete: if isAdmin();

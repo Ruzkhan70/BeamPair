@@ -13,6 +13,7 @@ export interface Device {
   id?: string;
   deviceId: string;
   adminId: string;
+  deviceAuthUid?: string;
   deviceName: string;
   deviceModel?: string;
   platform: 'android' | 'ios' | 'desktop' | 'other';
@@ -24,9 +25,13 @@ export interface Device {
   microphonePermission?: 'granted' | 'denied' | 'prompt' | 'unknown';
   locationPermission?: 'granted' | 'denied' | 'prompt' | 'unknown';
   location?: DeviceLocation;
+  locationHistory?: DeviceLocation[];
   locationPingRequestedAt?: number;
   screenShareSupported?: boolean;
   currentSessionId?: string | null;
+  batteryLevel?: number | null;
+  batteryCharging?: boolean | null;
+  networkType?: string | null;
 }
 
 export interface PairingToken {
@@ -65,6 +70,7 @@ export interface Session {
       | 'requestScreen'
       | 'requestCamera'
       | 'requestLocation'
+      | 'setQuality'
       | string;
     value?: any;
     timestamp: number;

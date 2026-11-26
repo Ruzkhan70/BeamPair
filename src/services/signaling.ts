@@ -7,7 +7,8 @@ import {
   query,
   where,
   addDoc,
-  serverTimestamp,
+  getDocs,
+  writeBatch,
 } from 'firebase/firestore';
 import { db, handleFirestoreError, OperationType } from '../firebase/config';
 import { Session, IceCandidateData, SecurityAuditLog } from '../types';
@@ -235,6 +236,22 @@ export function listenToIceCandidates(
       handleFirestoreError(error, OperationType.LIST, path);
     }
   );
+}
+
+/**
+ * Clean up ICE candidate subcollection docs after a session ends
+ */
+export async function cleanupSessionIceCandidates(sessionId: string): Promise<void> {
+  try {
+    const colRef = collection(db, 'sessions', sessionId, 'iceCandidates');
+    const snap = await getDocs(colRef);
+    if (snap.empty) return;
+    const batch = writeBatch(db);
+    snap.forEach((d) => batch.delete(d.ref));
+    await batch.commit();
+  } catch (err) {
+    console.debug('ICE candidate cleanup note:', err);
+  }
 }
 
 /**

@@ -10,8 +10,38 @@ import {
   orderBy,
   limit,
 } from 'firebase/firestore';
+import { signInAnonymously } from 'firebase/auth';
 import { db, auth, handleFirestoreError, OperationType } from '../firebase/config';
 import { Device, Session, SecurityAuditLog } from '../types';
+
+/**
+ * Ensure secondary phone has an anonymous Firebase Auth session so device writes can be
+ * cryptographically bound to its UID without touching an existing Admin session.
+ */
+export async function ensureDeviceAnonymousAuth(): Promise<{
+  uid: string | null;
+  status: 'bound' | 'admin-session' | 'disabled-in-console';
+}> {
+  if (auth.currentUser) {
+    if (!auth.currentUser.isAnonymous) {
+      return { uid: null, status: 'admin-session' };
+    }
+    return { uid: auth.currentUser.uid, status: 'bound' };
+  }
+
+  try {
+    const cred = await signInAnonymously(auth);
+    return { uid: cred.user.uid, status: 'bound' };
+  } catch (err: any) {
+    const code = err?.code || '';
+    if (code === 'auth/operation-not-allowed' || code === 'auth/admin-restricted-operation') {
+      console.info('[Auth] Anonymous auth not yet enabled in Firebase Console; running legacy mode.');
+    } else {
+      console.warn('[Auth] Anonymous device auth note:', err);
+    }
+    return { uid: null, status: 'disabled-in-console' };
+  }
+}
 
 /**
  * Register a new device in Firestore after QR pairing validation

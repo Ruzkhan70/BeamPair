@@ -23,6 +23,10 @@ import {
   Eye,
   Compass,
   Navigation,
+  Route,
+  Battery,
+  BatteryCharging,
+  Wifi,
 } from 'lucide-react';
 import { Device, DeviceLocation } from '../types';
 
@@ -39,6 +43,7 @@ interface MapControllerProps {
   devicesWithLocation: Device[];
   activeDevice: Device | null;
   followActive: boolean;
+  showTrail: boolean;
   onUserDragStart: () => void;
   recenterSignal: number;
   zoomDeltaSignal: { seq: number; delta: number };
@@ -51,6 +56,7 @@ const MapController: React.FC<MapControllerProps> = ({
   devicesWithLocation,
   activeDevice,
   followActive,
+  showTrail,
   onUserDragStart,
   recenterSignal,
   zoomDeltaSignal,
@@ -62,6 +68,7 @@ const MapController: React.FC<MapControllerProps> = ({
   const mapsLib = useMapsLibrary('maps');
   const streetViewLib = useMapsLibrary('streetView');
   const circlesRef = useRef<Record<string, any>>({});
+  const trailPolylineRef = useRef<any>(null);
   const lastPannedCoordsRef = useRef<string>('');
   const lastRecenterSeqRef = useRef<number>(0);
   const lastZoomSeqRef = useRef<number>(0);
@@ -132,10 +139,44 @@ const MapController: React.FC<MapControllerProps> = ({
     });
   }, [map, mapsLib, devicesWithLocation, activeDevice?.deviceId]);
 
+  // Render GPS Breadcrumb Trail for active device
+  useEffect(() => {
+    if (!map || !mapsLib) return;
+
+    if (trailPolylineRef.current) {
+      trailPolylineRef.current.setMap(null);
+      trailPolylineRef.current = null;
+    }
+
+    if (!showTrail || !activeDevice?.location) return;
+
+    const history = Array.isArray(activeDevice.locationHistory) ? activeDevice.locationHistory : [];
+    const path = [
+      ...history.map((pt) => ({ lat: pt.latitude, lng: pt.longitude })),
+      { lat: activeDevice.location.latitude, lng: activeDevice.location.longitude },
+    ];
+
+    if (path.length >= 2) {
+      trailPolylineRef.current = new mapsLib.Polyline({
+        map,
+        path,
+        geodesic: true,
+        strokeColor: '#818cf8',
+        strokeOpacity: 0.85,
+        strokeWeight: 3,
+        clickable: false,
+      });
+    }
+  }, [map, mapsLib, showTrail, activeDevice?.deviceId, activeDevice?.location, activeDevice?.locationHistory]);
+
   useEffect(() => {
     return () => {
       Object.values(circlesRef.current).forEach((c) => c.setMap(null));
       circlesRef.current = {};
+      if (trailPolylineRef.current) {
+        trailPolylineRef.current.setMap(null);
+        trailPolylineRef.current = null;
+      }
     };
   }, []);
 
@@ -247,6 +288,7 @@ interface InteractiveFallbackMapProps {
   devicesWithLocation: Device[];
   activeDevice: Device | null;
   followActive: boolean;
+  showTrail: boolean;
   recenterSignal: number;
   zoomDeltaSignal: { seq: number; delta: number };
   localFocusTarget: { lat: number; lng: number; seq: number } | null;
@@ -269,6 +311,7 @@ const InteractiveFallbackMap: React.FC<InteractiveFallbackMapProps> = ({
   devicesWithLocation,
   activeDevice,
   followActive,
+  showTrail,
   recenterSignal,
   zoomDeltaSignal,
   localFocusTarget,
@@ -281,6 +324,8 @@ const InteractiveFallbackMap: React.FC<InteractiveFallbackMapProps> = ({
   const labelLayerRef = useRef<L.TileLayer | null>(null);
   const markersRef = useRef<Record<string, L.Marker>>({});
   const circlesRef = useRef<Record<string, L.Circle>>({});
+  const trailPolylineRef = useRef<L.Polyline | null>(null);
+  const trailDotsRef = useRef<L.CircleMarker[]>([]);
   const lastPannedCoordsRef = useRef<string>('');
   const lastRecenterSeqRef = useRef<number>(0);
   const lastZoomSeqRef = useRef<number>(0);
@@ -316,6 +361,8 @@ const InteractiveFallbackMap: React.FC<InteractiveFallbackMapProps> = ({
       labelLayerRef.current = null;
       markersRef.current = {};
       circlesRef.current = {};
+      trailPolylineRef.current = null;
+      trailDotsRef.current = [];
     };
   }, []);
 
@@ -458,6 +505,47 @@ const InteractiveFallbackMap: React.FC<InteractiveFallbackMapProps> = ({
     });
   }, [devicesWithLocation, activeDevice?.deviceId, onSelectDevice]);
 
+  // Render GPS Breadcrumb Trail in Leaflet
+  useEffect(() => {
+    const lMap = mapRef.current;
+    if (!lMap) return;
+
+    if (trailPolylineRef.current) {
+      lMap.removeLayer(trailPolylineRef.current);
+      trailPolylineRef.current = null;
+    }
+    trailDotsRef.current.forEach((dot) => lMap.removeLayer(dot));
+    trailDotsRef.current = [];
+
+    if (!showTrail || !activeDevice?.location) return;
+
+    const history = Array.isArray(activeDevice.locationHistory) ? activeDevice.locationHistory : [];
+    const latLngs: [number, number][] = [
+      ...history.map((pt) => [pt.latitude, pt.longitude] as [number, number]),
+      [activeDevice.location.latitude, activeDevice.location.longitude],
+    ];
+
+    if (latLngs.length >= 2) {
+      trailPolylineRef.current = L.polyline(latLngs, {
+        color: '#818cf8',
+        weight: 3,
+        opacity: 0.85,
+        dashArray: '6, 6',
+      }).addTo(lMap);
+
+      history.forEach((pt) => {
+        const dot = L.circleMarker([pt.latitude, pt.longitude], {
+          radius: 3.5,
+          color: '#c7d2fe',
+          weight: 1,
+          fillColor: '#6366f1',
+          fillOpacity: 0.85,
+        }).addTo(lMap);
+        trailDotsRef.current.push(dot);
+      });
+    }
+  }, [showTrail, activeDevice?.deviceId, activeDevice?.location, activeDevice?.locationHistory]);
+
   // Follow active device
   useEffect(() => {
     const lMap = mapRef.current;
@@ -538,6 +626,7 @@ export const DeviceMapViewer: React.FC<DeviceMapViewerProps> = ({
 
   // Interactive camera & street-view controls state
   const [followActive, setFollowActive] = useState<boolean>(true);
+  const [showTrail, setShowTrail] = useState<boolean>(true);
   const [recenterSignal, setRecenterSignal] = useState<number>(0);
   const [zoomDeltaSignal, setZoomDeltaSignal] = useState<{ seq: number; delta: number }>({
     seq: 0,
@@ -739,6 +828,23 @@ export const DeviceMapViewer: React.FC<DeviceMapViewerProps> = ({
             </button>
           )}
 
+          {/* GPS Breadcrumb Trail Toggle */}
+          {!compact && activeDevice?.location && (
+            <button
+              type="button"
+              onClick={() => setShowTrail((v) => !v)}
+              className={`px-2.5 py-1.5 rounded-xl text-[10px] font-semibold flex items-center space-x-1 border transition cursor-pointer whitespace-nowrap ${
+                showTrail
+                  ? 'bg-indigo-500/20 border-indigo-500/40 text-indigo-300'
+                  : 'bg-slate-800 hover:bg-slate-700 border-slate-700 text-slate-300'
+              }`}
+              title="Show or hide recent GPS breadcrumb trail"
+            >
+              <Route className="w-3.5 h-3.5" />
+              <span>Trail ({(activeDevice.locationHistory?.length || 0) + 1})</span>
+            </button>
+          )}
+
           {/* 360 Street View Button (when Google Maps API active) */}
           {!compact && useGoogleMaps && (
             <button
@@ -831,6 +937,7 @@ export const DeviceMapViewer: React.FC<DeviceMapViewerProps> = ({
                 devicesWithLocation={devicesWithLocation}
                 activeDevice={activeDevice}
                 followActive={followActive}
+                showTrail={showTrail}
                 onUserDragStart={handleUserDragStart}
                 recenterSignal={recenterSignal}
                 zoomDeltaSignal={zoomDeltaSignal}
@@ -891,6 +998,7 @@ export const DeviceMapViewer: React.FC<DeviceMapViewerProps> = ({
             devicesWithLocation={devicesWithLocation}
             activeDevice={activeDevice}
             followActive={followActive}
+            showTrail={showTrail}
             recenterSignal={recenterSignal}
             zoomDeltaSignal={zoomDeltaSignal}
             localFocusTarget={localFocusTarget}
@@ -1058,6 +1166,25 @@ export const DeviceMapViewer: React.FC<DeviceMapViewerProps> = ({
             {/* Additional Telemetry Details */}
             {!compact && (
               <div className="text-[11px] text-slate-400 space-y-1">
+                {(typeof activeDevice.batteryLevel === 'number' || activeDevice.networkType) && (
+                  <div className="flex justify-between items-center">
+                    <span>Device Health:</span>
+                    <span className="flex items-center space-x-2 text-slate-300 font-mono">
+                      {typeof activeDevice.batteryLevel === 'number' && (
+                        <span className={`inline-flex items-center space-x-1 ${activeDevice.batteryLevel <= 20 && !activeDevice.batteryCharging ? 'text-rose-400' : 'text-emerald-400'}`}>
+                          {activeDevice.batteryCharging ? <BatteryCharging className="w-3 h-3" /> : <Battery className="w-3 h-3" />}
+                          <span>{activeDevice.batteryLevel}%</span>
+                        </span>
+                      )}
+                      {activeDevice.networkType && (
+                        <span className="inline-flex items-center space-x-1 text-indigo-300">
+                          <Wifi className="w-3 h-3" />
+                          <span>{activeDevice.networkType.toUpperCase()}</span>
+                        </span>
+                      )}
+                    </span>
+                  </div>
+                )}
                 <div className="flex justify-between items-center">
                   <span>Speed / Heading:</span>
                   <span className="text-slate-300 font-mono">

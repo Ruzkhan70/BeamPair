@@ -24,6 +24,11 @@ import {
   MapPin,
   Crosshair,
   LocateFixed,
+  Mic,
+  MicOff,
+  Square,
+  Battery,
+  BatteryCharging,
 } from 'lucide-react';
 import { Device, Session, DeviceLocation } from '../types';
 import { WebRTCManager } from '../services/webrtc';
@@ -35,6 +40,7 @@ import {
   terminateSession,
   recordSecurityAudit,
   sendSessionRemoteCommand,
+  cleanupSessionIceCandidates,
 } from '../services/signaling';
 import { updateDeviceHeartbeat, listenToDevice, requestDeviceLocationPing } from '../services/deviceService';
 import { DeviceMapViewer } from './DeviceMapViewer';
@@ -82,6 +88,14 @@ export const AdminLiveStreamModal: React.FC<AdminLiveStreamModalProps> = ({
   }>({ transport: 'unknown', fps: null, rttMs: null, bitrateKbps: null });
   const [showMiniMap, setShowMiniMap] = useState<boolean>(false);
   const [liveDeviceLocation, setLiveDeviceLocation] = useState<DeviceLocation | undefined>(device.location);
+  const [liveLocationHistory, setLiveLocationHistory] = useState<DeviceLocation[] | undefined>(device.locationHistory);
+  const [liveBatteryLevel, setLiveBatteryLevel] = useState<number | null | undefined>(device.batteryLevel);
+  const [liveBatteryCharging, setLiveBatteryCharging] = useState<boolean | null | undefined>(device.batteryCharging);
+  const [liveNetworkType, setLiveNetworkType] = useState<string | null | undefined>(device.networkType);
+  const [streamQuality, setStreamQuality] = useState<'saver' | 'balanced' | 'hd'>('balanced');
+  const [isTalkbackActive, setIsTalkbackActive] = useState<boolean>(false);
+  const [isRecording, setIsRecording] = useState<boolean>(false);
+  const [recordingSeconds, setRecordingSeconds] = useState<number>(0);
   const isStaticHost = typeof window !== 'undefined' && window.location.hostname.endsWith('github.io');
 
   const videoRef = useRef<HTMLVideoElement | null>(null);
@@ -90,6 +104,8 @@ export const AdminLiveStreamModal: React.FC<AdminLiveStreamModalProps> = ({
   const audioRef = useRef<HTMLAudioElement | null>(null);
   const containerRef = useRef<HTMLDivElement | null>(null);
   const webrtcRef = useRef<WebRTCManager | null>(null);
+  const mediaRecorderRef = useRef<MediaRecorder | null>(null);
+  const recordedChunksRef = useRef<Blob[]>([]);
   const unsubscribeSessionRef = useRef<(() => void) | null>(null);
   const unsubscribeCandidatesRef = useRef<(() => void) | null>(null);
   const lastAppliedAnswerRef = useRef<string | null>(null);
@@ -106,11 +122,36 @@ export const AdminLiveStreamModal: React.FC<AdminLiveStreamModalProps> = ({
     return () => clearInterval(timer);
   }, [streamStartedAt]);
 
-  // Real-time Device Location Sync
+  // Recording timer
+  useEffect(() => {
+    if (!isRecording) {
+      setRecordingSeconds(0);
+      return;
+    }
+    const timer = setInterval(() => {
+      setRecordingSeconds((s) => s + 1);
+    }, 1000);
+    return () => clearInterval(timer);
+  }, [isRecording]);
+
+  // Real-time Device Location & Health Telemetry Sync
   useEffect(() => {
     const unsub = listenToDevice(device.deviceId, (updatedDev) => {
-      if (updatedDev?.location) {
+      if (!updatedDev) return;
+      if (updatedDev.location) {
         setLiveDeviceLocation(updatedDev.location);
+      }
+      if (updatedDev.locationHistory) {
+        setLiveLocationHistory(updatedDev.locationHistory);
+      }
+      if (updatedDev.batteryLevel !== undefined) {
+        setLiveBatteryLevel(updatedDev.batteryLevel);
+      }
+      if (updatedDev.batteryCharging !== undefined) {
+        setLiveBatteryCharging(updatedDev.batteryCharging);
+      }
+      if (updatedDev.networkType !== undefined) {
+        setLiveNetworkType(updatedDev.networkType);
       }
     });
     return () => unsub();
@@ -122,7 +163,17 @@ export const AdminLiveStreamModal: React.FC<AdminLiveStreamModalProps> = ({
   };
 
   const handleTeardown = useCallback(() => {
+    if (mediaRecorderRef.current && mediaRecorderRef.current.state !== 'inactive') {
+      try {
+        mediaRecorderRef.current.stop();
+      } catch {}
+    }
+    mediaRecorderRef.current = null;
+    setIsRecording(false);
+    setIsTalkbackActive(false);
+
     if (webrtcRef.current) {
+      webrtcRef.current.stopTalkback().catch(() => {});
       webrtcRef.current.close();
       webrtcRef.current = null;
     }
@@ -250,6 +301,10 @@ export const AdminLiveStreamModal: React.FC<AdminLiveStreamModalProps> = ({
           } else if (cmd.action === 'cameraFacingStatus') {
             if (cmd.value === 'user' || cmd.value === 'environment') {
               setRemoteCameraFacing(cmd.value);
+            }
+          } else if (cmd.action === 'qualityStatus') {
+            if (cmd.value === 'saver' || cmd.value === 'balanced' || cmd.value === 'hd') {
+              setStreamQuality(cmd.value);
             }
           }
         };
@@ -526,7 +581,100 @@ export const AdminLiveStreamModal: React.FC<AdminLiveStreamModalProps> = ({
     showTemporaryFeedback('No active video feed to capture');
   };
 
-  // 6. Retry / Restart ICE Renegotiation
+  // 6. Change Remote Stream Quality (360p / 480p / 720p)
+  const handleChangeQuality = async (quality: 'saver' | 'balanced' | 'hd') => {
+    setStreamQuality(quality);
+    const label = quality === 'saver' ? '360p Saver' : quality === 'hd' ? '720p HD' : '480p Balanced';
+    showTemporaryFeedback(`Switching stream quality to ${label}...`);
+    const sent = webrtcRef.current?.sendControlCommand('setQuality', quality);
+    if (!sent) {
+      await sendSessionRemoteCommand(session.sessionId, { action: 'setQuality', value: quality });
+    }
+  };
+
+  // 7. Toggle Two-Way Push-to-Talk (Admin Mic -> Phone Speaker)
+  const handleToggleTalkback = async () => {
+    if (!webrtcRef.current) return;
+    if (isTalkbackActive) {
+      await webrtcRef.current.stopTalkback();
+      setIsTalkbackActive(false);
+      webrtcRef.current.sendControlCommand('talkbackStatus', false);
+      showTemporaryFeedback('Push-to-Talk ended');
+      return;
+    }
+
+    try {
+      await webrtcRef.current.startTalkback();
+      setIsTalkbackActive(true);
+      webrtcRef.current.sendControlCommand('talkbackStatus', true);
+      showTemporaryFeedback('Microphone live — speaking to phone');
+    } catch (err) {
+      console.warn('Push-to-Talk microphone error:', err);
+      showTemporaryFeedback('Allow browser microphone to speak to the phone');
+      setIsTalkbackActive(false);
+    }
+  };
+
+  // 8. Record & Download Live Video Clip via MediaRecorder
+  const handleToggleRecording = () => {
+    if (isRecording && mediaRecorderRef.current) {
+      try {
+        mediaRecorderRef.current.stop();
+      } catch {}
+      setIsRecording(false);
+      return;
+    }
+
+    if (!activeRemoteStream || activeRemoteStream.getVideoTracks().length === 0) {
+      showTemporaryFeedback('Wait for live WebRTC video stream before recording');
+      return;
+    }
+
+    try {
+      recordedChunksRef.current = [];
+      const mimeTypes = [
+        'video/webm;codecs=vp9,opus',
+        'video/webm;codecs=vp8,opus',
+        'video/webm',
+      ];
+      const supportedMime = mimeTypes.find((m) => MediaRecorder.isTypeSupported(m));
+      const recorder = supportedMime
+        ? new MediaRecorder(activeRemoteStream, { mimeType: supportedMime })
+        : new MediaRecorder(activeRemoteStream);
+
+      recorder.ondataavailable = (evt) => {
+        if (evt.data && evt.data.size > 0) {
+          recordedChunksRef.current.push(evt.data);
+        }
+      };
+
+      recorder.onstop = () => {
+        const chunks = recordedChunksRef.current;
+        recordedChunksRef.current = [];
+        if (chunks.length === 0) return;
+        const blob = new Blob(chunks, { type: supportedMime || 'video/webm' });
+        const url = URL.createObjectURL(blob);
+        const a = document.createElement('a');
+        a.href = url;
+        a.download = `beampair_clip_${device.deviceName.replace(/\s+/g, '_')}_${Date.now()}.webm`;
+        document.body.appendChild(a);
+        a.click();
+        document.body.removeChild(a);
+        setTimeout(() => URL.revokeObjectURL(url), 4000);
+        showTemporaryFeedback('Recorded video clip downloaded!');
+      };
+
+      mediaRecorderRef.current = recorder;
+      recorder.start(1000);
+      setIsRecording(true);
+      showTemporaryFeedback('Recording live video clip...');
+    } catch (err) {
+      console.error('Recording error:', err);
+      showTemporaryFeedback('Video recording is unavailable in this browser');
+    }
+  };
+
+  // 9. Retry / Restart ICE Renegotiation
   const handleRetryIce = async () => {
     showTemporaryFeedback('Re-negotiating ICE connection...');
     if (webrtcRef.current) {
@@ -537,7 +685,7 @@ export const AdminLiveStreamModal: React.FC<AdminLiveStreamModalProps> = ({
     }
   };
 
-  // 7. Toggle Fullscreen
+  // 10. Toggle Fullscreen
   const toggleFullscreen = () => {
     if (!containerRef.current) return;
     if (!document.fullscreenElement) {
@@ -549,7 +697,7 @@ export const AdminLiveStreamModal: React.FC<AdminLiveStreamModalProps> = ({
     }
   };
 
-  // 8. Admin-Only Disconnect Command
+  // 11. Admin-Only Disconnect Command (+ ICE Candidate Subcollection Cleanup)
   const handleAdminDisconnect = async () => {
     setIsEnding(true);
     try {
@@ -565,6 +713,7 @@ export const AdminLiveStreamModal: React.FC<AdminLiveStreamModalProps> = ({
 
       await terminateSession(session.sessionId, 'admin', 'Administrative disconnect command');
       await updateDeviceHeartbeat(device.deviceId, { currentSessionId: null });
+      await cleanupSessionIceCandidates(session.sessionId).catch(() => {});
 
       await recordSecurityAudit({
         adminId,
@@ -608,6 +757,23 @@ export const AdminLiveStreamModal: React.FC<AdminLiveStreamModalProps> = ({
                 <span className="px-1.5 sm:px-2 py-0.5 bg-indigo-500/10 border border-indigo-500/20 text-indigo-400 font-mono text-[10px] rounded-md shrink-0">
                   {timeFormatted}
                 </span>
+                {typeof liveBatteryLevel === 'number' && (
+                  <span
+                    className={`hidden md:inline-flex items-center space-x-1 px-1.5 py-0.5 rounded-md font-mono text-[10px] border shrink-0 ${
+                      liveBatteryLevel <= 20 && !liveBatteryCharging
+                        ? 'bg-rose-500/15 border-rose-500/30 text-rose-300'
+                        : 'bg-slate-800 border-slate-700 text-slate-300'
+                    }`}
+                  >
+                    {liveBatteryCharging ? (
+                      <BatteryCharging className="w-3 h-3 text-emerald-400" />
+                    ) : (
+                      <Battery className="w-3 h-3 text-indigo-400" />
+                    )}
+                    <span>{liveBatteryLevel}%</span>
+                    {liveNetworkType ? <span className="text-slate-400">• {liveNetworkType.toUpperCase()}</span> : null}
+                  </span>
+                )}
               </div>
               <p className="text-[10px] sm:text-[11px] text-slate-400 font-mono truncate">
                 WebRTC: <span className={isConnected ? 'text-emerald-400 font-semibold' : 'text-amber-400'}>{connectionState}</span> • ICE: {iceState}
@@ -617,6 +783,31 @@ export const AdminLiveStreamModal: React.FC<AdminLiveStreamModalProps> = ({
 
           {/* Quick Toolbar */}
           <div className="flex items-center space-x-1.5 sm:space-x-2 shrink-0">
+            {/* Quality Selector */}
+            <div className="hidden sm:flex items-center bg-slate-800/80 border border-slate-700/80 rounded-xl p-0.5 text-[10px] font-mono">
+              {(
+                [
+                  { id: 'saver', label: '360p' },
+                  { id: 'balanced', label: '480p' },
+                  { id: 'hd', label: '720p' },
+                ] as const
+              ).map((q) => (
+                <button
+                  key={q.id}
+                  type="button"
+                  onClick={() => handleChangeQuality(q.id)}
+                  className={`px-2 py-1 rounded-lg font-semibold transition cursor-pointer ${
+                    streamQuality === q.id
+                      ? 'bg-emerald-600 text-white'
+                      : 'text-slate-400 hover:text-slate-200'
+                  }`}
+                  title={`Stream Quality: ${q.label}`}
+                >
+                  {q.label}
+                </button>
+              ))}
+            </div>
+
             {/* Viewport Aspect Ratio Toggle */}
             <div className="flex items-center bg-slate-800/80 border border-slate-700/80 rounded-xl p-0.5 text-xs">
               <button
@@ -725,7 +916,7 @@ export const AdminLiveStreamModal: React.FC<AdminLiveStreamModalProps> = ({
                 </div>
               </div>
               <DeviceMapViewer
-                devices={[{ ...device, location: liveDeviceLocation }]}
+                devices={[{ ...device, location: liveDeviceLocation, locationHistory: liveLocationHistory }]}
                 selectedDeviceId={device.deviceId}
                 onRequestLocationPing={async () => {
                   await handleRemoteRequestLocation();
@@ -1023,6 +1214,50 @@ export const AdminLiveStreamModal: React.FC<AdminLiveStreamModalProps> = ({
               <span className="hidden sm:inline">{isVideoPaused ? 'Resume Video' : 'Pause Video'}</span>
             </button>
 
+            {/* Push-to-Talk (Admin Mic -> Phone Speaker) */}
+            <button
+              type="button"
+              onClick={handleToggleTalkback}
+              className={`px-1.5 py-2 sm:px-3.5 sm:py-2 border rounded-xl text-[10px] sm:text-xs font-semibold flex flex-col sm:flex-row items-center justify-center gap-1 sm:space-x-2 transition cursor-pointer shadow-xs active:scale-95 ${
+                isTalkbackActive
+                  ? 'bg-amber-500/25 border-amber-400 text-amber-200 animate-pulse'
+                  : 'bg-slate-800 hover:bg-slate-700 text-slate-200 border-slate-700'
+              }`}
+              title="Speak from Admin microphone through Phone speaker"
+            >
+              {isTalkbackActive ? (
+                <Mic className="w-3.5 h-3.5 text-amber-400 shrink-0" />
+              ) : (
+                <MicOff className="w-3.5 h-3.5 text-slate-400 shrink-0" />
+              )}
+              <span className="sm:hidden leading-tight text-center">{isTalkbackActive ? 'Talking' : 'Talk'}</span>
+              <span className="hidden sm:inline">{isTalkbackActive ? 'Mic Live' : 'Talk to Phone'}</span>
+            </button>
+
+            {/* Record Live Video Clip */}
+            <button
+              type="button"
+              onClick={handleToggleRecording}
+              className={`px-1.5 py-2 sm:px-3.5 sm:py-2 border rounded-xl text-[10px] sm:text-xs font-semibold flex flex-col sm:flex-row items-center justify-center gap-1 sm:space-x-2 transition cursor-pointer shadow-xs active:scale-95 ${
+                isRecording
+                  ? 'bg-rose-600/30 border-rose-500 text-rose-200'
+                  : 'bg-slate-800 hover:bg-slate-700 text-slate-200 border-slate-700'
+              }`}
+              title="Record live stream clip and save locally"
+            >
+              {isRecording ? (
+                <Square className="w-3.5 h-3.5 text-rose-400 fill-rose-400 shrink-0" />
+              ) : (
+                <Camera className="w-3.5 h-3.5 text-rose-400 shrink-0" />
+              )}
+              <span className="sm:hidden leading-tight text-center">
+                {isRecording ? `${recordingSeconds}s` : 'Rec'}
+              </span>
+              <span className="hidden sm:inline">
+                {isRecording ? `Stop (${recordingSeconds}s)` : 'Record Clip'}
+              </span>
+            </button>
+
             {/* HD Snapshot */}
             <button
               type="button"
@@ -1061,6 +1296,23 @@ export const AdminLiveStreamModal: React.FC<AdminLiveStreamModalProps> = ({
               {liveDeviceLocation && (
                 <span className="hidden sm:inline-block w-2 h-2 rounded-full bg-emerald-400 animate-pulse" />
               )}
+            </button>
+
+            {/* Mobile Quality Cycle + Reconnect inside mobile grid */}
+            <button
+              type="button"
+              onClick={() => {
+                const next =
+                  streamQuality === 'saver' ? 'balanced' : streamQuality === 'balanced' ? 'hd' : 'saver';
+                handleChangeQuality(next);
+              }}
+              className="sm:hidden px-1.5 py-2 bg-slate-800 hover:bg-slate-700 text-emerald-300 border border-slate-700 rounded-xl text-[10px] font-semibold flex flex-col items-center justify-center gap-1 transition cursor-pointer shadow-xs active:scale-95"
+              title="Cycle stream quality"
+            >
+              <Activity className="w-3.5 h-3.5 text-emerald-400 shrink-0" />
+              <span className="leading-tight text-center">
+                {streamQuality === 'saver' ? '360p' : streamQuality === 'hd' ? '720p' : '480p'}
+              </span>
             </button>
 
             {/* Mobile quick Reconnect button inside the 4x2 grid */}

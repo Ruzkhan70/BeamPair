@@ -87,6 +87,12 @@
           "pattern": "^[a-zA-Z0-9_-]+$",
           "description": "Owner administrator user ID."
         },
+        "deviceAuthUid": {
+          "type": "string",
+          "maxLength": 128,
+          "pattern": "^[a-zA-Z0-9_-]+$",
+          "description": "Firebase Anonymous Auth UID bound to this paired phone for security verification."
+        },
         "deviceName": {
           "type": "string",
           "maxLength": 100,
@@ -147,9 +153,26 @@
           "type": "object",
           "description": "Last reported GPS coordinates and accuracy metadata."
         },
+        "locationHistory": {
+          "type": "array",
+          "description": "Bounded breadcrumb trail of recent GPS coordinates (max 25 points)."
+        },
         "locationPingRequestedAt": {
           "type": "number",
           "description": "Timestamp of last admin out-of-session GPS ping request."
+        },
+        "batteryLevel": {
+          "type": "number",
+          "description": "Last reported device battery percentage (0-100)."
+        },
+        "batteryCharging": {
+          "type": "boolean",
+          "description": "Whether the paired phone is currently charging."
+        },
+        "networkType": {
+          "type": "string",
+          "maxLength": 32,
+          "description": "Effective network connection type reported by device (e.g. 4g, wifi)."
         }
       },
       "required": ["deviceId", "adminId", "deviceName", "status", "isRevoked", "pairedAt"]
