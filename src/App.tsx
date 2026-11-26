@@ -4,6 +4,7 @@ import { auth, BOOTSTRAP_ADMIN_EMAIL } from './firebase/config';
 import { Navbar } from './components/Navbar';
 import { AdminDashboard } from './components/AdminDashboard';
 import { SecondaryDeviceView } from './components/SecondaryDeviceView';
+import { OfflineIndicator } from './components/PWAControls';
 import { ShieldCheck, Smartphone, LogIn, AlertCircle, Loader2, Lock, LogOut, ShieldAlert, ExternalLink } from 'lucide-react';
 
 export default function App() {
@@ -281,6 +282,7 @@ export default function App() {
           BeamPair Remote Device Support • Enterprise P2P Session Security
         </div>
       </footer>
+      <OfflineIndicator />
     </div>
   );
 }

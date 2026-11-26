@@ -64,6 +64,9 @@ export const AdminLiveStreamModal: React.FC<AdminLiveStreamModalProps> = ({
   const [viewMode, setViewMode] = useState<'phone' | 'fit'>('phone');
   const [isTorchOn, setIsTorchOn] = useState<boolean>(false);
   const [isScreenSharing, setIsScreenSharing] = useState<boolean>(session.requestScreen || false);
+  const [remoteCameraFacing, setRemoteCameraFacing] = useState<'user' | 'environment'>(
+    session.cameraFacing || 'environment'
+  );
   const [commandFeedback, setCommandFeedback] = useState<string | null>(null);
   const [snapshotSuccess, setSnapshotSuccess] = useState<boolean>(false);
   const [audioNeedsClick, setAudioNeedsClick] = useState<boolean>(false);
@@ -73,6 +76,7 @@ export const AdminLiveStreamModal: React.FC<AdminLiveStreamModalProps> = ({
   const [liveFallbackFrame, setLiveFallbackFrame] = useState<string | null>(null);
   const [showMiniMap, setShowMiniMap] = useState<boolean>(false);
   const [liveDeviceLocation, setLiveDeviceLocation] = useState<DeviceLocation | undefined>(device.location);
+  const isStaticHost = typeof window !== 'undefined' && window.location.hostname.endsWith('github.io');
 
   const videoRef = useRef<HTMLVideoElement | null>(null);
   const relayImgRef = useRef<HTMLImageElement | null>(null);
@@ -208,6 +212,10 @@ export const AdminLiveStreamModal: React.FC<AdminLiveStreamModalProps> = ({
             setIsTorchOn(Boolean(cmd.value));
           } else if (cmd.action === 'screenSharingActive') {
             setIsScreenSharing(Boolean(cmd.value));
+          } else if (cmd.action === 'cameraFacingStatus') {
+            if (cmd.value === 'user' || cmd.value === 'environment') {
+              setRemoteCameraFacing(cmd.value);
+            }
           }
         };
 
@@ -352,12 +360,20 @@ export const AdminLiveStreamModal: React.FC<AdminLiveStreamModalProps> = ({
     }
   };
 
-  // 3. Remotely Switch Phone Camera (Front vs Rear)
+  // 3. Remotely Switch Phone Camera (Front vs Rear) deterministically
   const handleRemoteSwitchCamera = async () => {
-    showTemporaryFeedback('Requesting phone to switch camera...');
-    const sent = webrtcRef.current?.sendControlCommand('switchCamera');
+    const nextFacing: 'user' | 'environment' =
+      remoteCameraFacing === 'environment' ? 'user' : 'environment';
+    setRemoteCameraFacing(nextFacing);
+    if (nextFacing === 'user') {
+      setIsTorchOn(false);
+    }
+    showTemporaryFeedback(
+      nextFacing === 'user' ? 'Switching phone to Front Camera...' : 'Switching phone to Back Camera...'
+    );
+    const sent = webrtcRef.current?.sendControlCommand('switchCamera', nextFacing);
     if (!sent) {
-      await sendSessionRemoteCommand(session.sessionId, { action: 'switchCamera' });
+      await sendSessionRemoteCommand(session.sessionId, { action: 'switchCamera', value: nextFacing });
     }
   };
 
@@ -689,7 +705,7 @@ export const AdminLiveStreamModal: React.FC<AdminLiveStreamModalProps> = ({
                   />
 
                   {/* Smooth High-FPS MJPEG Live Stream Fallback when WebRTC isn't playing */}
-                  {!isWebRtcPlaying && (
+                  {!isWebRtcPlaying && !isStaticHost && (
                     <img
                       ref={relayImgRef}
                       src={`/api/stream/live/${session.sessionId}`}
@@ -782,7 +798,7 @@ export const AdminLiveStreamModal: React.FC<AdminLiveStreamModalProps> = ({
                 }`}
               />
 
-              {!isWebRtcPlaying && (
+              {!isWebRtcPlaying && !isStaticHost && (
                 <img
                   ref={relayImgRef}
                   src={`/api/stream/live/${session.sessionId}`}
@@ -854,7 +870,7 @@ export const AdminLiveStreamModal: React.FC<AdminLiveStreamModalProps> = ({
               title="Flip between Rear and Front phone camera"
             >
               <RefreshCw className="w-3.5 h-3.5 text-indigo-400" />
-              <span>Switch Camera</span>
+              <span>{remoteCameraFacing === 'environment' ? 'Switch to Front' : 'Switch to Back'}</span>
             </button>
 
             {/* Mirror Phone Screen */}

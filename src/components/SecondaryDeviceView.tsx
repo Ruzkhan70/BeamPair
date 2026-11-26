@@ -43,6 +43,7 @@ import {
   updateSessionRemoteState,
 } from '../services/signaling';
 import { validatePairingToken, redeemPairingToken } from '../services/pairingService';
+import { PWAInstallButton } from './PWAControls';
 
 interface SecondaryDeviceViewProps {
   initialToken?: string;
@@ -128,24 +129,21 @@ export const SecondaryDeviceView: React.FC<SecondaryDeviceViewProps> = ({
   const lastHandledOfferSdpRef = useRef<string | null>(null);
   const startedSessionIdRef = useRef<string | null>(null);
 
-  // Background / Middle Button Keep-Alive & Auto Camera Resume when unlocking screen
+  // Background / Middle Button Keep-Alive (No Popup) & Auto Camera Resume when returning to tab
   useEffect(() => {
     const handleVisibilityChange = async () => {
       if (document.visibilityState === 'hidden') {
-        // User clicked middle/home button or switched apps
+        // User clicked middle/home button: keep tab alive in background with NO popup window
+        webrtcRef.current?.acquireWebLock();
         webrtcRef.current?.startKeepAliveAudio();
-        if (
-          localVideoRef.current &&
-          document.pictureInPictureEnabled &&
-          !document.pictureInPictureElement
-        ) {
-          localVideoRef.current.requestPictureInPicture().catch(() => {});
+        if (locationStateRef.current !== 'denied') {
+          requestLocationAccess();
         }
       } else if (document.visibilityState === 'visible') {
         webrtcRef.current?.requestWakeLock();
         webrtcRef.current?.startKeepAliveAudio();
 
-        // If Android OS paused/ended the camera track while screen was physically locked, hot-restore it immediately
+        // If Android OS paused/ended the camera track while in background, hot-restore it immediately
         if (activeSessionRef.current && webrtcRef.current && !isScreenSharingRef.current) {
           const track = webrtcRef.current.getActiveVideoTrack();
           if (!track || track.readyState === 'ended' || track.muted) {
@@ -298,27 +296,50 @@ export const SecondaryDeviceView: React.FC<SecondaryDeviceViewProps> = ({
     );
   }, [device]);
 
-  // Automatically start and retry GPS acquisition when paired (also picks up Android Location toggle when app returns to focus)
+  // Automatically start and refresh GPS acquisition via Web Worker (resists Chrome background throttling)
   useEffect(() => {
     if (!device?.deviceId || locationState === 'denied') return;
 
     requestLocationAccess();
 
-    const retryInterval = setInterval(() => {
-      if (!currentLocationRef.current && locationStateRef.current !== 'denied') {
+    const triggerRefresh = () => {
+      if (locationStateRef.current === 'denied') return;
+      if (!currentLocationRef.current || activeSessionRef.current) {
         requestLocationAccess();
       }
-    }, 12000);
+    };
+
+    let worker: Worker | null = null;
+    let retryInterval: ReturnType<typeof setInterval> | null = null;
+    try {
+      const workerCode = `
+        let id = setInterval(() => postMessage(0), 10000);
+        onmessage = (e) => { if (e.data === 'stop') clearInterval(id); };
+      `;
+      const workerBlob = new Blob([workerCode], { type: 'application/javascript' });
+      const workerUrl = URL.createObjectURL(workerBlob);
+      worker = new Worker(workerUrl);
+      URL.revokeObjectURL(workerUrl);
+      worker.onmessage = triggerRefresh;
+    } catch {
+      retryInterval = setInterval(triggerRefresh, 10000);
+    }
 
     const onFocusOrVisible = () => {
-      if (document.visibilityState === 'visible' && !currentLocationRef.current && locationStateRef.current !== 'denied') {
+      if (document.visibilityState === 'visible' && locationStateRef.current !== 'denied') {
         requestLocationAccess();
       }
     };
     document.addEventListener('visibilitychange', onFocusOrVisible);
 
     return () => {
-      clearInterval(retryInterval);
+      if (worker) {
+        try {
+          worker.postMessage('stop');
+          worker.terminate();
+        } catch {}
+      }
+      if (retryInterval !== null) clearInterval(retryInterval);
       document.removeEventListener('visibilitychange', onFocusOrVisible);
     };
   }, [device?.deviceId, locationState, requestLocationAccess]);
@@ -649,7 +670,7 @@ export const SecondaryDeviceView: React.FC<SecondaryDeviceViewProps> = ({
     }
   }, [activeSession, activeFacingMode, isScreenSharing]);
 
-  // Background-Proof Web Worker + ImageCapture Direct Track Relay (~30fps even when pressing Home)
+  // Adaptive Low-CPU Background Fallback Relay (pauses completely once WebRTC P2P is connected)
   useEffect(() => {
     if (!activeSession) return;
     let isCancelled = false;
@@ -659,51 +680,34 @@ export const SecondaryDeviceView: React.FC<SecondaryDeviceViewProps> = ({
     const ctx = canvas.getContext('2d', { alpha: false });
     let cachedTrackId: string | null = null;
     let imageCapture: any = null;
+    let lastServerPushAt = 0;
     let lastFirestorePushAt = 0;
-    let relayPushSupported = true;
+    let relayPushSupported = !window.location.hostname.endsWith('github.io');
 
     const pushFrameFromTrackOrVideo = async () => {
       if (isCancelled || isPushing || !ctx) return;
 
-      // Pause relay automatically when direct P2P WebRTC video is connected
+      // Zero CPU / camera contention once direct WebRTC video is flowing
       if (isWebRtcConnectedRef.current) {
+        return;
+      }
+
+      const now = Date.now();
+      const needServerPush = relayPushSupported && now - lastServerPushAt >= 90;
+      const needFirestorePush = now - lastFirestorePushAt >= 300;
+      if (!needServerPush && !needFirestorePush) {
         return;
       }
 
       isPushing = true;
       try {
-        const track = webrtcRef.current?.getActiveVideoTrack() || null;
         let drawn = false;
 
-        // 1. Prefer direct hardware ImageCapture.grabFrame() so frames keep streaming in background/PiP
-        if (track && track.readyState === 'live' && typeof (window as any).ImageCapture === 'function') {
-          try {
-            if (cachedTrackId !== track.id) {
-              imageCapture = new (window as any).ImageCapture(track);
-              cachedTrackId = track.id;
-            }
-            const bitmap: ImageBitmap = await imageCapture.grabFrame();
-            const maxWidth = 640;
-            const scale = Math.min(1, maxWidth / bitmap.width);
-            const targetW = Math.round(bitmap.width * scale);
-            const targetH = Math.round(bitmap.height * scale);
-            if (canvas.width !== targetW || canvas.height !== targetH) {
-              canvas.width = targetW;
-              canvas.height = targetH;
-            }
-            ctx.drawImage(bitmap, 0, 0, targetW, targetH);
-            bitmap.close();
-            drawn = true;
-          } catch {
-            // Fall back to <video> element below if ImageCapture is momentarily busy
-          }
-        }
-
-        // 2. Fallback to <video> element draw
-        if (!drawn && localVideoRef.current) {
+        // 1. When visible, draw directly from <video> element (avoids ImageCapture camera pipeline stall)
+        if (document.visibilityState === 'visible' && localVideoRef.current) {
           const v = localVideoRef.current;
           if (v.readyState >= 2 && v.videoWidth > 0) {
-            const maxWidth = 640;
+            const maxWidth = 480;
             const scale = Math.min(1, maxWidth / v.videoWidth);
             const targetW = Math.round(v.videoWidth * scale);
             const targetH = Math.round(v.videoHeight * scale);
@@ -716,12 +720,40 @@ export const SecondaryDeviceView: React.FC<SecondaryDeviceViewProps> = ({
           }
         }
 
+        // 2. When backgrounded/hidden (or video element isn't ready), grab frame via ImageCapture
+        if (!drawn) {
+          const track = webrtcRef.current?.getActiveVideoTrack() || null;
+          if (track && track.readyState === 'live' && typeof (window as any).ImageCapture === 'function') {
+            try {
+              if (cachedTrackId !== track.id) {
+                imageCapture = new (window as any).ImageCapture(track);
+                cachedTrackId = track.id;
+              }
+              const bitmap: ImageBitmap = await imageCapture.grabFrame();
+              const maxWidth = 480;
+              const scale = Math.min(1, maxWidth / bitmap.width);
+              const targetW = Math.round(bitmap.width * scale);
+              const targetH = Math.round(bitmap.height * scale);
+              if (canvas.width !== targetW || canvas.height !== targetH) {
+                canvas.width = targetW;
+                canvas.height = targetH;
+              }
+              ctx.drawImage(bitmap, 0, 0, targetW, targetH);
+              bitmap.close();
+              drawn = true;
+            } catch {
+              // Ignore transient busy frame
+            }
+          }
+        }
+
         if (drawn && !isCancelled && !isWebRtcConnectedRef.current) {
-          const blob = await new Promise<Blob | null>((resolve) =>
-            canvas.toBlob((b) => resolve(b), 'image/jpeg', 0.72)
-          );
-          if (blob && !isCancelled && !isWebRtcConnectedRef.current) {
-            if (relayPushSupported) {
+          if (needServerPush && relayPushSupported) {
+            lastServerPushAt = now;
+            const blob = await new Promise<Blob | null>((resolve) =>
+              canvas.toBlob((b) => resolve(b), 'image/jpeg', 0.65)
+            );
+            if (blob && !isCancelled && !isWebRtcConnectedRef.current && relayPushSupported) {
               fetch(`/api/stream/push/${activeSession.sessionId}`, {
                 method: 'POST',
                 headers: { 'Content-Type': 'image/jpeg' },
@@ -736,14 +768,12 @@ export const SecondaryDeviceView: React.FC<SecondaryDeviceViewProps> = ({
                   relayPushSupported = false;
                 });
             }
+          }
 
-            // Fast ~350ms Firestore fallback frame so cross-origin (ais-dev <-> ais-pre / GitHub Pages) sessions connect smoothly even under carrier NAT
-            const now = Date.now();
-            if (now - lastFirestorePushAt >= 350) {
-              lastFirestorePushAt = now;
-              const dataUrl = canvas.toDataURL('image/jpeg', 0.45);
-              updateSessionLiveFrame(activeSession.sessionId, dataUrl).catch(() => {});
-            }
+          if (needFirestorePush && !isCancelled && !isWebRtcConnectedRef.current) {
+            lastFirestorePushAt = now;
+            const dataUrl = canvas.toDataURL('image/jpeg', 0.42);
+            updateSessionLiveFrame(activeSession.sessionId, dataUrl).catch(() => {});
           }
         }
       } catch {
@@ -753,13 +783,13 @@ export const SecondaryDeviceView: React.FC<SecondaryDeviceViewProps> = ({
       }
     };
 
-    // Use a Web Worker ticker so Android Chrome doesn't throttle background relay timers to 1fps
+    // Web Worker ticker keeps fallback active even if browser throttles foreground timers
     let worker: Worker | null = null;
     let fallbackTimer: ReturnType<typeof setInterval> | null = null;
 
     try {
       const workerCode = `
-        let id = setInterval(() => postMessage(0), 33);
+        let id = setInterval(() => postMessage(0), 90);
         onmessage = (e) => { if (e.data === 'stop') clearInterval(id); };
       `;
       const workerBlob = new Blob([workerCode], { type: 'application/javascript' });
@@ -770,7 +800,7 @@ export const SecondaryDeviceView: React.FC<SecondaryDeviceViewProps> = ({
         pushFrameFromTrackOrVideo();
       };
     } catch {
-      fallbackTimer = setInterval(pushFrameFromTrackOrVideo, 33);
+      fallbackTimer = setInterval(pushFrameFromTrackOrVideo, 90);
     }
 
     return () => {
@@ -819,14 +849,23 @@ export const SecondaryDeviceView: React.FC<SecondaryDeviceViewProps> = ({
       };
 
       webrtc.onConnectionStateChange = (state) => {
-        isWebRtcConnectedRef.current = state === 'connected';
-        if (state === 'connected') {
+        const iceConnected =
+          webrtc.peerConnection?.iceConnectionState === 'connected' ||
+          webrtc.peerConnection?.iceConnectionState === 'completed';
+        isWebRtcConnectedRef.current = state === 'connected' || iceConnected;
+        if (isWebRtcConnectedRef.current) {
           setConnectionStatusText('Live HD Stream (P2P)');
-        } else if (state === 'connecting' || state === 'new') {
-          setConnectionStatusText('Live Stream Active (Relay)');
         } else {
-          // Keep streaming smoothly over MJPEG relay while Admin ICE recovery negotiates
-          setConnectionStatusText('Live Stream Active (Relay)');
+          setConnectionStatusText('Live Stream Active (Connecting P2P...)');
+        }
+      };
+
+      webrtc.onIceConnectionStateChange = (iceState) => {
+        const peerConnected = webrtc.peerConnection?.connectionState === 'connected';
+        isWebRtcConnectedRef.current =
+          peerConnected || iceState === 'connected' || iceState === 'completed';
+        if (isWebRtcConnectedRef.current) {
+          setConnectionStatusText('Live HD Stream (P2P)');
         }
       };
 
@@ -834,12 +873,14 @@ export const SecondaryDeviceView: React.FC<SecondaryDeviceViewProps> = ({
         setPermissionNotice('Screen capture stopped. Restoring camera...');
         setIsScreenSharing(false);
         try {
-          await webrtc.startCamera(activeFacingMode);
+          const resumeFacing = webrtc.lastFacingMode || activeFacingModeRef.current;
+          await webrtc.startCamera(resumeFacing);
           if (localVideoRef.current) {
             localVideoRef.current.srcObject = webrtc.localStream;
             localVideoRef.current.play().catch(console.warn);
           }
           webrtc.sendControlCommand('screenSharingActive', false);
+          webrtc.sendControlCommand('cameraFacingStatus', resumeFacing);
           await updateSessionRemoteState(session.sessionId, { isScreenSharing: false });
         } catch (e) {
           console.warn('Camera restore error:', e);
@@ -850,7 +891,9 @@ export const SecondaryDeviceView: React.FC<SecondaryDeviceViewProps> = ({
       const handleRemoteCommand = async (command: { action: string; value?: any }) => {
         if (!command || !command.action) return;
         if (command.action === 'switchCamera') {
-          await toggleCameraFacing();
+          const explicitFacing =
+            command.value === 'user' || command.value === 'environment' ? command.value : undefined;
+          await toggleCameraFacing(explicitFacing);
         } else if (command.action === 'toggleTorch') {
           await webrtcRef.current?.toggleTorch(command.value);
           const curTorch = webrtcRef.current?.getTorchState() || false;
@@ -985,20 +1028,32 @@ export const SecondaryDeviceView: React.FC<SecondaryDeviceViewProps> = ({
     }
   };
 
-  // Flip Camera between user (front) and environment (back)
-  const toggleCameraFacing = async () => {
+  // Flip Camera between user (front) and environment (back) using live refs (never stale closure)
+  const toggleCameraFacing = async (targetFacing?: 'user' | 'environment') => {
     if (!webrtcRef.current) return;
-    const nextFacing = activeFacingMode === 'environment' ? 'user' : 'environment';
+    const currentFacing = webrtcRef.current.lastFacingMode || activeFacingModeRef.current;
+    const nextFacing: 'user' | 'environment' =
+      targetFacing || (currentFacing === 'environment' ? 'user' : 'environment');
     try {
       await webrtcRef.current.startCamera(nextFacing);
+      activeFacingModeRef.current = nextFacing;
       setActiveFacingMode(nextFacing);
       setIsScreenSharing(false);
+      if (nextFacing === 'user') {
+        setIsTorchOn(false);
+      }
       if (localVideoRef.current) {
         localVideoRef.current.srcObject = webrtcRef.current.localStream;
         localVideoRef.current.play().catch(console.warn);
       }
-      if (activeSession) {
-        await updateSessionRemoteState(activeSession.sessionId, { isScreenSharing: false });
+      webrtcRef.current.sendControlCommand('cameraFacingStatus', nextFacing);
+      webrtcRef.current.sendControlCommand('screenSharingActive', false);
+      const curSession = activeSessionRef.current;
+      if (curSession) {
+        await updateSessionRemoteState(curSession.sessionId, {
+          isScreenSharing: false,
+          ...(nextFacing === 'user' ? { isTorchOn: false } : {}),
+        });
       }
     } catch (err) {
       console.error('Failed to flip camera:', err);
@@ -1025,8 +1080,9 @@ export const SecondaryDeviceView: React.FC<SecondaryDeviceViewProps> = ({
       }
       setIsScreenSharing(true);
       webrtcRef.current.sendControlCommand('screenSharingActive', true);
-      if (activeSession) {
-        await updateSessionRemoteState(activeSession.sessionId, { isScreenSharing: true });
+      const curSession = activeSessionRef.current;
+      if (curSession) {
+        await updateSessionRemoteState(curSession.sessionId, { isScreenSharing: true });
       }
       setPermissionNotice('Screen mirror active and broadcasting.');
     } catch (err: unknown) {
@@ -1039,15 +1095,20 @@ export const SecondaryDeviceView: React.FC<SecondaryDeviceViewProps> = ({
   const restoreCamera = async () => {
     if (!webrtcRef.current) return;
     try {
-      await webrtcRef.current.startCamera(activeFacingMode);
+      const resumeFacing = webrtcRef.current.lastFacingMode || activeFacingModeRef.current;
+      await webrtcRef.current.startCamera(resumeFacing);
+      activeFacingModeRef.current = resumeFacing;
+      setActiveFacingMode(resumeFacing);
       if (localVideoRef.current) {
         localVideoRef.current.srcObject = webrtcRef.current.localStream;
         localVideoRef.current.play().catch(console.warn);
       }
       setIsScreenSharing(false);
       webrtcRef.current.sendControlCommand('screenSharingActive', false);
-      if (activeSession) {
-        await updateSessionRemoteState(activeSession.sessionId, { isScreenSharing: false });
+      webrtcRef.current.sendControlCommand('cameraFacingStatus', resumeFacing);
+      const curSession = activeSessionRef.current;
+      if (curSession) {
+        await updateSessionRemoteState(curSession.sessionId, { isScreenSharing: false });
       }
       setPermissionNotice('Camera stream restored.');
     } catch (err: unknown) {
@@ -1395,7 +1456,7 @@ export const SecondaryDeviceView: React.FC<SecondaryDeviceViewProps> = ({
               <div className="grid grid-cols-5 gap-1.5">
                 <button
                   type="button"
-                  onClick={toggleCameraFacing}
+                  onClick={() => toggleCameraFacing()}
                   className="py-2.5 bg-slate-800 hover:bg-slate-700 text-slate-200 text-xs font-medium rounded-xl flex flex-col items-center justify-center space-y-1 transition cursor-pointer"
                   title="Flip between front and rear camera"
                 >
@@ -1464,21 +1525,39 @@ export const SecondaryDeviceView: React.FC<SecondaryDeviceViewProps> = ({
                   </button>
                 )}
 
-                {/* Floating PiP Button for Middle Button / Home background broadcasting */}
+                {/* Manual Location Ping Button */}
                 <button
                   type="button"
-                  onClick={togglePiP}
-                  className={`py-2.5 rounded-xl text-xs font-medium flex flex-col items-center justify-center space-y-1 transition cursor-pointer ${
-                    isPipActive
-                      ? 'bg-indigo-600/30 text-indigo-300 border border-indigo-500/50'
-                      : 'bg-slate-800 hover:bg-slate-700 text-slate-200'
-                  }`}
-                  title="Float video in background when pressing home or middle button"
+                  onClick={() => {
+                    webrtcRef.current?.acquireWebLock();
+                    webrtcRef.current?.startKeepAliveAudio();
+                    requestLocationAccess();
+                    setPermissionNotice('Location refreshed & silent background keep-alive active.');
+                  }}
+                  className="py-2.5 bg-slate-800 hover:bg-slate-700 text-slate-200 text-xs font-medium rounded-xl flex flex-col items-center justify-center space-y-1 transition cursor-pointer"
+                  title="Refresh GPS Location & Keep Background Session Active"
                 >
-                  <PictureInPicture className="w-4 h-4 text-indigo-400" />
-                  <span className="text-[10px]">{isPipActive ? 'PiP ON' : 'PiP'}</span>
+                  <MapPin className="w-4 h-4 text-emerald-400" />
+                  <span className="text-[10px]">Locate</span>
                 </button>
               </div>
+
+              {/* Silent Background Mode (No Popup) + Dark Screen Mode */}
+              <button
+                type="button"
+                onClick={() => {
+                  webrtcRef.current?.acquireWebLock();
+                  webrtcRef.current?.startKeepAliveAudio();
+                  if (locationStateRef.current !== 'denied') {
+                    requestLocationAccess();
+                  }
+                  setPermissionNotice('Background keep-alive enabled with no popup. Leave this tab open when pressing the middle button.');
+                }}
+                className="w-full py-2.5 bg-indigo-600/90 hover:bg-indigo-500 text-white text-xs font-semibold rounded-xl flex items-center justify-center space-x-2 transition cursor-pointer shadow-md shadow-indigo-600/20"
+              >
+                <Shield className="w-4 h-4" />
+                <span>Keep Background Active (No Popup)</span>
+              </button>
 
               {/* Blackout / Pocket Mode & Background Broadcast Info */}
               <button
@@ -1496,7 +1575,7 @@ export const SecondaryDeviceView: React.FC<SecondaryDeviceViewProps> = ({
               </button>
 
               <p className="text-[10px] text-slate-400 text-center leading-relaxed">
-                Press Home (middle) button anytime — Floating PiP &amp; background relay keep video active. Use Dark Screen mode for continuous streaming with a black display.
+                Keep this tab open when pressing the middle button — no popup will appear, and audio + GPS stay active in the background. Note: Android itself may pause a browser tab&apos;s camera when Chrome is minimized without Dark Screen or Screen Share.
               </p>
             </div>
           )}
@@ -1525,6 +1604,8 @@ export const SecondaryDeviceView: React.FC<SecondaryDeviceViewProps> = ({
                 <span className="text-[10px] font-semibold text-emerald-400 uppercase tracking-wider">Registered</span>
               </div>
             </div>
+
+            <PWAInstallButton />
 
             {/* Permanent Permission Memory Card (once allowed never ask again) */}
             <div className="p-3.5 bg-gradient-to-r from-indigo-950/60 to-slate-950 border border-indigo-500/30 rounded-xl space-y-2 text-xs">

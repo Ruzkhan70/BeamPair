@@ -40,6 +40,9 @@ export const DEFAULT_STUN_TURN_SERVERS: RTCIceServer[] = [
 ];
 
 export async function fetchIceServers(): Promise<RTCIceServer[]> {
+  if (typeof window !== 'undefined' && window.location.hostname.endsWith('github.io')) {
+    return DEFAULT_STUN_TURN_SERVERS;
+  }
   try {
     const res = await fetch('/api/webrtc/ice-servers');
     if (res.ok) {
@@ -266,37 +269,17 @@ export class WebRTCManager {
     }
   }
 
-  // Register Automatic Picture-in-Picture (Chromium/Android Chrome triggers this on Home/middle button press)
+  // Configure background video playback without triggering an automatic PiP popup window
   enableAutoPiP(videoEl: HTMLVideoElement | null, onPiPChange?: (active: boolean) => void): void {
     if (!videoEl) return;
     try {
-      (videoEl as any).autoPictureInPicture = true;
+      (videoEl as any).autoPictureInPicture = false;
       videoEl.disablePictureInPicture = false;
     } catch {}
 
-    const tryEnterPiP = async () => {
-      try {
-        if (
-          document.pictureInPictureEnabled &&
-          !document.pictureInPictureElement &&
-          videoEl.readyState >= 1
-        ) {
-          await videoEl.requestPictureInPicture();
-          onPiPChange?.(true);
-        }
-      } catch {
-        // Browsers without auto-PiP ignore silently
-      }
-    };
-
-    try {
-      if ('mediaSession' in navigator && navigator.mediaSession) {
-        navigator.mediaSession.setActionHandler('enterpictureinpicture' as any, () => {
-          tryEnterPiP();
-        });
-      }
-    } catch {
-      // Action may not be implemented in non-Chromium browsers
+    if (onPiPChange) {
+      videoEl.onenterpictureinpicture = () => onPiPChange(true);
+      videoEl.onleavepictureinpicture = () => onPiPChange(false);
     }
   }
 
@@ -378,47 +361,94 @@ export class WebRTCManager {
     }
   }
 
-  // Camera capture with front or rear facing support & Android-resilient fallback
+  // Camera capture with deterministic front/rear switching & low-latency Android constraints
   async startCamera(
     facingMode: 'user' | 'environment' = 'environment',
     specificDeviceId?: string
   ): Promise<MediaStreamTrack> {
     this.lastFacingMode = facingMode;
     this.isScreenSharingActive = false;
+    this.isTorchOn = false;
 
-    // Stop any existing video tracks first
+    const currentDeviceId = this.currentVideoTrack?.getSettings?.().deviceId;
+
+    // Stop any existing video tracks first so Android releases the previous camera lens cleanly
     this.localStream.getVideoTracks().forEach((track) => {
       track.stop();
       this.localStream.removeTrack(track);
     });
+    this.currentVideoTrack = null;
 
     let stream: MediaStream | null = null;
 
-    // Constraint strategy 1: Preferred facing or specific camera ID with 720p/1080p and smooth 30-60fps
-    const constraintsPrimary: MediaStreamConstraints = {
+    // Strategy 1: Force exact facingMode with smooth 540p/720p @ 30fps so upload & TURN never lag
+    const constraintsExact: MediaStreamConstraints = {
       video: specificDeviceId
-        ? { deviceId: { exact: specificDeviceId }, frameRate: { ideal: 30, max: 60 } }
+        ? { deviceId: { exact: specificDeviceId }, width: { ideal: 960, max: 1280 }, height: { ideal: 540, max: 720 }, frameRate: { ideal: 30, max: 30 } }
         : {
-            facingMode: { ideal: facingMode },
-            width: { ideal: 1280, max: 1920 },
-            height: { ideal: 720, max: 1080 },
-            frameRate: { ideal: 30, max: 60 },
+            facingMode: { exact: facingMode },
+            width: { ideal: 960, max: 1280 },
+            height: { ideal: 540, max: 720 },
+            frameRate: { ideal: 30, max: 30 },
           },
       audio: false,
     };
 
     try {
-      stream = await navigator.mediaDevices.getUserMedia(constraintsPrimary);
-    } catch (primaryErr) {
-      console.warn('Primary camera constraint failed, attempting basic fallback for Android compatibility:', primaryErr);
-      // Constraint strategy 2: Relaxed fallback for legacy Android devices
-      const fallbackConstraints: MediaStreamConstraints = {
-        video: specificDeviceId
-          ? { deviceId: { exact: specificDeviceId } }
-          : { facingMode: { ideal: facingMode } },
-        audio: false,
-      };
-      stream = await navigator.mediaDevices.getUserMedia(fallbackConstraints);
+      stream = await navigator.mediaDevices.getUserMedia(constraintsExact);
+    } catch (exactErr) {
+      // Strategy 2: Match camera lens by deviceId label (handles multi-lens Androids where exact facingMode fails)
+      if (!specificDeviceId) {
+        try {
+          const cameras = await WebRTCManager.getAvailableCameras();
+          if (cameras.length > 1) {
+            const wantFront = facingMode === 'user';
+            const matchedCam =
+              cameras.find((c) => {
+                const lbl = (c.label || '').toLowerCase();
+                return wantFront
+                  ? lbl.includes('front') || lbl.includes('user') || lbl.includes('selfie')
+                  : lbl.includes('back') || lbl.includes('rear') || lbl.includes('environment');
+              }) || cameras.find((c) => c.deviceId && c.deviceId !== currentDeviceId);
+
+            if (matchedCam?.deviceId) {
+              stream = await navigator.mediaDevices.getUserMedia({
+                video: {
+                  deviceId: { exact: matchedCam.deviceId },
+                  width: { ideal: 960, max: 1280 },
+                  height: { ideal: 540, max: 720 },
+                  frameRate: { ideal: 30, max: 30 },
+                },
+                audio: false,
+              });
+            }
+          }
+        } catch {
+          // Continue to ideal fallback
+        }
+      }
+
+      if (!stream) {
+        console.warn('Exact camera constraint failed, using ideal fallback:', exactErr);
+        try {
+          stream = await navigator.mediaDevices.getUserMedia({
+            video: specificDeviceId
+              ? { deviceId: { exact: specificDeviceId } }
+              : {
+                  facingMode: { ideal: facingMode },
+                  width: { ideal: 854, max: 1280 },
+                  height: { ideal: 480, max: 720 },
+                  frameRate: { ideal: 30, max: 30 },
+                },
+            audio: false,
+          });
+        } catch {
+          stream = await navigator.mediaDevices.getUserMedia({
+            video: specificDeviceId ? { deviceId: { exact: specificDeviceId } } : { facingMode: { ideal: facingMode } },
+            audio: false,
+          });
+        }
+      }
     }
 
     const videoTrack = stream.getVideoTracks()[0];
@@ -429,7 +459,8 @@ export class WebRTCManager {
     } catch {}
     this.currentVideoTrack = videoTrack;
     this.localStream.addTrack(videoTrack);
-    // Only push directly onto PeerConnection if remote offer already set transceivers (or we're admin)
+
+    // Push onto PeerConnection if remote offer already set transceivers (or we're admin)
     if (this.role === 'admin' || this.isRemoteDescriptionSet) {
       this.replaceOrAddTrack(videoTrack);
     }
@@ -559,7 +590,7 @@ export class WebRTCManager {
         params.encodings = [{}];
       }
       params.degradationPreference = 'maintain-framerate';
-      params.encodings[0].maxBitrate = 2_500_000;
+      params.encodings[0].maxBitrate = 950_000;
       params.encodings[0].maxFramerate = 30;
       await sender.setParameters(params);
     } catch {

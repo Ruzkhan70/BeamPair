@@ -9,6 +9,7 @@ import {
   ExternalLink,
 } from 'lucide-react';
 import { BOOTSTRAP_ADMIN_EMAIL } from '../firebase/config';
+import { PWAInstallButton } from './PWAControls';
 
 interface NavbarProps {
   currentView: 'admin' | 'secondary';
@@ -71,7 +72,8 @@ export const Navbar: React.FC<NavbarProps> = ({
         </div>
 
         {/* Auth / Profile Area */}
-        <div className="flex items-center space-x-3">
+        <div className="flex items-center space-x-2 sm:space-x-3">
+          <PWAInstallButton compact />
           {adminEmail ? (
             <div className="flex items-center space-x-2">
               <div className="hidden md:flex flex-col text-right">
