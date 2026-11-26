@@ -53,7 +53,13 @@ const FALLBACK_OPEN_RELAY: RTCIceServer[] = [
 let cachedMeteredIce: { servers: RTCIceServer[]; expiresAt: number } | null = null;
 
 async function resolveIceServers(): Promise<{ iceServers: RTCIceServer[]; provider: string }> {
-  const meteredApp = (process.env.METERED_APP_NAME || '').trim();
+  const rawMeteredApp = (process.env.METERED_APP_NAME || '').trim();
+  const meteredApp = rawMeteredApp
+    .replace(/^https?:\/\//i, '')
+    .split('/')[0]
+    .replace(/\.+$/, '')
+    .replace(/\.metered\.live$/i, '')
+    .trim();
   const meteredKey = (process.env.METERED_API_KEY || '').trim();
 
   if (meteredApp && meteredKey) {
@@ -62,7 +68,7 @@ async function resolveIceServers(): Promise<{ iceServers: RTCIceServer[]; provid
     }
     try {
       const controller = new AbortController();
-      const timer = setTimeout(() => controller.abort(), 2500);
+      const timer = setTimeout(() => controller.abort(), 3500);
       const url = `https://${encodeURIComponent(meteredApp)}.metered.live/api/v1/turn/credentials?apiKey=${encodeURIComponent(meteredKey)}`;
       const resp = await fetch(url, { signal: controller.signal });
       clearTimeout(timer);
