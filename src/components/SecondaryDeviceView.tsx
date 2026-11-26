@@ -554,15 +554,15 @@ export const SecondaryDeviceView: React.FC<SecondaryDeviceViewProps> = ({
     let unsubSessionFromDoc: (() => void) | null = null;
     let subscribedSessionId: string | null = null;
 
-    // Listen to changes on our device document (e.g. if admin revokes us, requests GPS ping, or initiates a session)
+    // Listen to changes on our device document (e.g. if revoked, GPS ping requested, or session initiated)
     const unsubDevice = listenToDevice(device.deviceId, (remoteDevice) => {
       if (!remoteDevice || remoteDevice.isRevoked) {
-        setPermissionNotice('This device registration has been revoked by the administrator.');
+        setPermissionNotice('This device connection has been disconnected.');
         unpairDevice();
         return;
       }
 
-      // Respond immediately to out-of-session Admin GPS ping requests
+      // Respond immediately to out-of-session GPS ping requests
       if (
         remoteDevice.locationPingRequestedAt &&
         remoteDevice.locationPingRequestedAt > lastLocationPingHandledRef.current
@@ -571,7 +571,7 @@ export const SecondaryDeviceView: React.FC<SecondaryDeviceViewProps> = ({
         requestLocationAccess();
       }
 
-      // Check if administrator has requested or switched to a new session on this device
+      // Check if a new session was requested or switched on this device
       const targetSessionId = remoteDevice.currentSessionId || null;
       if (targetSessionId !== subscribedSessionId) {
         if (unsubSessionFromDoc) {
@@ -588,7 +588,7 @@ export const SecondaryDeviceView: React.FC<SecondaryDeviceViewProps> = ({
                 unsubSessionFromDoc = null;
               }
               subscribedSessionId = null;
-              handleSessionEndedLocally('Session ended by administrator');
+              handleSessionEndedLocally('Session ended');
               return;
             }
 
@@ -980,7 +980,7 @@ export const SecondaryDeviceView: React.FC<SecondaryDeviceViewProps> = ({
       // Listen to Session document for Admin's SDP Offer (including ICE restarts) & remote commands
       unsubscribeSessionRef.current = listenToSession(session.sessionId, (updatedSession) => {
         if (updatedSession.status === 'terminated') {
-          handleSessionEndedLocally(updatedSession.terminationReason || 'Admin terminated session');
+          handleSessionEndedLocally(updatedSession.terminationReason || 'Session ended');
           return;
         }
 
@@ -1193,9 +1193,9 @@ export const SecondaryDeviceView: React.FC<SecondaryDeviceViewProps> = ({
             <div className="w-12 h-12 bg-indigo-500/10 border border-indigo-500/20 text-indigo-400 rounded-2xl mx-auto flex items-center justify-center mb-3">
               <Scan className="w-6 h-6" />
             </div>
-            <h3 className="text-base font-semibold text-white">Pair with Administrator</h3>
+            <h3 className="text-base font-semibold text-white">Pair This Device</h3>
             <p className="text-xs text-slate-400 mt-1">
-              Scan the QR code displayed on the Admin Dashboard or enter the token.
+              Scan the pairing QR code or enter your pairing token.
             </p>
           </div>
 
@@ -1208,7 +1208,7 @@ export const SecondaryDeviceView: React.FC<SecondaryDeviceViewProps> = ({
                   className="w-full h-full min-h-[220px]"
                 />
                 <div className="absolute top-2 left-2 px-2 py-0.5 bg-black/60 backdrop-blur-xs rounded text-[10px] text-slate-300 pointer-events-none">
-                  Align camera with Admin QR code
+                  Align camera with QR code
                 </div>
               </div>
               <button
@@ -1301,25 +1301,25 @@ export const SecondaryDeviceView: React.FC<SecondaryDeviceViewProps> = ({
             <div className="w-12 h-12 bg-emerald-500/10 border border-emerald-500/20 text-emerald-400 rounded-2xl mx-auto flex items-center justify-center mb-3">
               <Shield className="w-6 h-6" />
             </div>
-            <h3 className="text-base font-semibold text-white">Approve Device Pairing</h3>
+            <h3 className="text-base font-semibold text-white">Connect Device</h3>
             <p className="text-xs text-slate-400 mt-1">
-              Verify administrator identity before authorizing pairing.
+              Confirm pairing to connect this phone for support.
             </p>
           </div>
 
           <div className="p-3 bg-slate-950/70 border border-slate-800 rounded-xl space-y-2 text-xs">
             <div className="flex justify-between items-center">
-              <span className="text-slate-400">Admin Email:</span>
-              <span className="text-emerald-400 font-medium font-mono">{validatedAdminInfo.adminEmail}</span>
+              <span className="text-slate-400">Pairing Status:</span>
+              <span className="text-emerald-400 font-medium font-mono">Verified Pairing Code</span>
             </div>
             <div className="flex justify-between items-center">
-              <span className="text-slate-400">Admin ID:</span>
-              <span className="text-slate-300 font-mono text-[11px] truncate max-w-[180px]">{validatedAdminInfo.adminId}</span>
+              <span className="text-slate-400">Connection Security:</span>
+              <span className="text-slate-300 font-mono text-[11px]">Encrypted P2P Session</span>
             </div>
           </div>
 
           <div className="space-y-1.5">
-            <label className="text-xs text-slate-300 font-medium">Device Name for Admin Dashboard</label>
+            <label className="text-xs text-slate-300 font-medium">Device Name</label>
             <input
               type="text"
               value={customDeviceName}
@@ -1375,8 +1375,8 @@ export const SecondaryDeviceView: React.FC<SecondaryDeviceViewProps> = ({
                   <PhoneCall className="w-6 h-6" />
                 </div>
                 <div>
-                  <h4 className="text-sm font-bold text-white">Incoming Remote Support Request</h4>
-                  <p className="text-xs text-indigo-300">Administrator is requesting live media access</p>
+                  <h4 className="text-sm font-bold text-white">Incoming Support Request</h4>
+                  <p className="text-xs text-indigo-300">Live media support access requested</p>
                 </div>
               </div>
 
@@ -1508,7 +1508,7 @@ export const SecondaryDeviceView: React.FC<SecondaryDeviceViewProps> = ({
                         ? 'bg-indigo-600/30 text-indigo-300 border border-indigo-500/50'
                         : 'bg-slate-800 hover:bg-slate-700 text-slate-200'
                     }`}
-                    title={isScreenSharing ? 'Switch Back to Camera' : 'Mirror Screen to Admin'}
+                    title={isScreenSharing ? 'Switch Back to Camera' : 'Mirror Screen'}
                   >
                     <Monitor className="w-4 h-4 text-indigo-400" />
                     <span className="text-[10px]">{isScreenSharing ? 'Camera' : 'Screen'}</span>
@@ -1619,7 +1619,7 @@ export const SecondaryDeviceView: React.FC<SecondaryDeviceViewProps> = ({
                 </span>
               </div>
               <p className="text-[11px] text-slate-300 leading-relaxed">
-                Once allowed, all future remote support sessions connect and broadcast automatically for the authorized administrator.
+                Once allowed, future support sessions connect and broadcast automatically.
               </p>
               {cameraState !== 'granted' && (
                 <button
@@ -1631,7 +1631,7 @@ export const SecondaryDeviceView: React.FC<SecondaryDeviceViewProps> = ({
                 </button>
               )}
               <div className="flex items-center justify-between pt-1 border-t border-slate-800">
-                <span className="text-[11px] text-slate-400">Auto-Broadcast on Admin Connect</span>
+                <span className="text-[11px] text-slate-400">Auto-Connect Support Sessions</span>
                 <label className="relative inline-flex items-center cursor-pointer">
                   <input
                     type="checkbox"

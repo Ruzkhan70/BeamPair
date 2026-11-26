@@ -8,7 +8,44 @@ import { OfflineIndicator } from './components/PWAControls';
 import { ShieldCheck, Smartphone, LogIn, AlertCircle, Loader2, Lock, LogOut, ShieldAlert, ExternalLink } from 'lucide-react';
 
 export default function App() {
-  const [currentView, setCurrentView] = useState<'admin' | 'secondary'>('admin');
+  const [isClientOnly, setIsClientOnly] = useState<boolean>(() => {
+    if (typeof window === 'undefined') return false;
+    const urlParams = new URLSearchParams(window.location.search);
+    const pairParam = urlParams.get('pair');
+    const roleParam = urlParams.get('role');
+    if (pairParam || roleParam === 'phone' || roleParam === 'secondary') {
+      try {
+        localStorage.setItem('beampair_client_locked', 'true');
+      } catch {}
+      return true;
+    }
+    try {
+      return (
+        localStorage.getItem('beampair_client_locked') === 'true' ||
+        !!localStorage.getItem('beampair_device_registration')
+      );
+    } catch {
+      return false;
+    }
+  });
+  const [currentView, setCurrentView] = useState<'admin' | 'secondary'>(() => {
+    if (typeof window === 'undefined') return 'admin';
+    const urlParams = new URLSearchParams(window.location.search);
+    const pairParam = urlParams.get('pair');
+    const roleParam = urlParams.get('role');
+    const isMobilePhone = /Android|webOS|iPhone|iPad|iPod|BlackBerry|IEMobile|Opera Mini/i.test(navigator.userAgent);
+    if (
+      pairParam ||
+      roleParam === 'phone' ||
+      roleParam === 'secondary' ||
+      isMobilePhone ||
+      localStorage.getItem('beampair_client_locked') === 'true' ||
+      !!localStorage.getItem('beampair_device_registration')
+    ) {
+      return 'secondary';
+    }
+    return 'admin';
+  });
   const [adminUser, setAdminUser] = useState<{ uid: string; email: string } | null>(null);
   const [authReady, setAuthReady] = useState<boolean>(false);
   const [initialPairToken, setInitialPairToken] = useState<string>('');
@@ -32,9 +69,18 @@ export default function App() {
 
     if (pairParam) {
       setInitialPairToken(pairParam);
+      setIsClientOnly(true);
+      try {
+        localStorage.setItem('beampair_client_locked', 'true');
+      } catch {}
       setCurrentView('secondary');
-    } else if (roleParam === 'phone' || roleParam === 'secondary' || isMobilePhone) {
-      // Any physical phone or phone role link defaults to Secondary Phone pairing view
+    } else if (roleParam === 'phone' || roleParam === 'secondary') {
+      setIsClientOnly(true);
+      try {
+        localStorage.setItem('beampair_client_locked', 'true');
+      } catch {}
+      setCurrentView('secondary');
+    } else if (isMobilePhone) {
       setCurrentView('secondary');
     }
   }, []);
@@ -110,11 +156,14 @@ export default function App() {
   return (
     <div className="min-h-screen bg-slate-950 text-slate-100 flex flex-col font-sans selection:bg-indigo-500/30 selection:text-indigo-200">
       <Navbar
-        currentView={currentView}
-        onViewChange={(v) => setCurrentView(v)}
-        adminEmail={adminUser?.email || null}
+        currentView={isClientOnly ? 'secondary' : currentView}
+        onViewChange={(v) => {
+          if (!isClientOnly) setCurrentView(v);
+        }}
+        adminEmail={isClientOnly ? null : (adminUser?.email || null)}
         onSignIn={handleGoogleSignIn}
         onSignOut={handleSignOut}
+        isClientOnly={isClientOnly}
       />
 
       {mapsQuotaExceeded && (
@@ -136,7 +185,14 @@ export default function App() {
 
       {/* Main Content Area */}
       <main className="flex-1 flex flex-col">
-        {!authReady ? (
+        {isClientOnly ? (
+          <div className="flex-1 py-6 flex items-start justify-center">
+            <SecondaryDeviceView
+              initialToken={initialPairToken}
+              onClearInitialToken={() => setInitialPairToken('')}
+            />
+          </div>
+        ) : !authReady ? (
           <div className="flex-1 flex flex-col items-center justify-center p-6">
             <Loader2 className="w-8 h-8 text-indigo-400 animate-spin mb-3" />
             <p className="text-xs text-slate-400 font-mono">Initializing BeamPair secure environment...</p>
