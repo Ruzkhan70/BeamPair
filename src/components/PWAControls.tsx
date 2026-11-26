@@ -77,8 +77,8 @@ export const PWAInstallButton: React.FC<{ compact?: boolean }> = ({ compact = fa
         }
         title="Install BeamPair as a standalone app so leaving Chrome won't close your stream"
       >
-        <Download className="w-3.5 h-3.5" />
-        <span>{compact ? 'Install App' : 'Install BeamPair App (Standalone Window)'}</span>
+        <Download className="w-3.5 h-3.5 shrink-0" />
+        <span>{compact ? 'Install' : 'Install BeamPair App (Standalone Window)'}</span>
       </button>
     );
   }
@@ -89,10 +89,11 @@ export const PWAInstallButton: React.FC<{ compact?: boolean }> = ({ compact = fa
         <button
           type="button"
           onClick={() => setShowIOSGuide(true)}
-          className="px-2.5 py-1.5 bg-slate-800 hover:bg-slate-700 border border-slate-700 text-slate-200 text-xs font-semibold rounded-xl flex items-center space-x-1.5 transition cursor-pointer"
+          className="px-2 sm:px-2.5 py-1.5 bg-slate-800 hover:bg-slate-700 border border-slate-700 text-slate-200 text-[11px] sm:text-xs font-semibold rounded-xl flex items-center space-x-1.5 transition cursor-pointer whitespace-nowrap"
         >
-          <Smartphone className="w-3.5 h-3.5 text-indigo-400" />
-          <span>Add to Home</span>
+          <Smartphone className="w-3.5 h-3.5 text-indigo-400 shrink-0" />
+          <span className="sm:hidden">Home App</span>
+          <span className="hidden sm:inline">Add to Home</span>
         </button>
 
         {showIOSGuide && (

@@ -128,6 +128,7 @@ export const SecondaryDeviceView: React.FC<SecondaryDeviceViewProps> = ({
   const isWebRtcConnectedRef = useRef<boolean>(false);
   const lastHandledOfferSdpRef = useRef<string | null>(null);
   const startedSessionIdRef = useRef<string | null>(null);
+  const lastBlackoutTapRef = useRef<number>(0);
 
   // Background / Middle Button Keep-Alive (No Popup) & Auto Camera Resume when returning to tab
   useEffect(() => {
@@ -359,6 +360,10 @@ export const SecondaryDeviceView: React.FC<SecondaryDeviceViewProps> = ({
     try {
       // Small timeout to allow container element to render
       setTimeout(async () => {
+        const el = document.getElementById(scannerContainerId);
+        const containerW = el?.clientWidth || 280;
+        const boxSize = Math.max(160, Math.min(220, Math.floor(containerW * 0.72)));
+
         const html5QrCode = new Html5Qrcode(scannerContainerId);
         qrScannerRef.current = html5QrCode;
 
@@ -366,7 +371,7 @@ export const SecondaryDeviceView: React.FC<SecondaryDeviceViewProps> = ({
           { facingMode: 'environment' },
           {
             fps: 10,
-            qrbox: { width: 220, height: 220 },
+            qrbox: { width: boxSize, height: boxSize },
           },
           (decodedText) => {
             // Found QR Code
@@ -670,11 +675,12 @@ export const SecondaryDeviceView: React.FC<SecondaryDeviceViewProps> = ({
     }
   }, [activeSession, activeFacingMode, isScreenSharing]);
 
-  // Adaptive Low-CPU Background Fallback Relay (pauses completely once WebRTC P2P is connected)
+  // Adaptive Low-CPU Background Fallback Relay (paused during WebRTC handshake and once WebRTC P2P flows)
   useEffect(() => {
     if (!activeSession) return;
     let isCancelled = false;
     let isPushing = false;
+    const sessionStartedAt = Date.now();
 
     const canvas = document.createElement('canvas');
     const ctx = canvas.getContext('2d', { alpha: false });
@@ -693,8 +699,11 @@ export const SecondaryDeviceView: React.FC<SecondaryDeviceViewProps> = ({
       }
 
       const now = Date.now();
-      const needServerPush = relayPushSupported && now - lastServerPushAt >= 90;
-      const needFirestorePush = now - lastFirestorePushAt >= 300;
+      const elapsed = now - sessionStartedAt;
+      // Give WebRTC a 1.5s clean start before HTTP relay, and 4.5s clean start before Firestore fallback
+      // so large base64 writes never block SDP Answer or ICE candidates on sessions/{sessionId}.
+      const needServerPush = relayPushSupported && elapsed >= 1500 && now - lastServerPushAt >= 150;
+      const needFirestorePush = elapsed >= 4500 && now - lastFirestorePushAt >= 700;
       if (!needServerPush && !needFirestorePush) {
         return;
       }
@@ -702,12 +711,12 @@ export const SecondaryDeviceView: React.FC<SecondaryDeviceViewProps> = ({
       isPushing = true;
       try {
         let drawn = false;
+        const maxWidth = needServerPush ? 420 : 320;
 
         // 1. When visible, draw directly from <video> element (avoids ImageCapture camera pipeline stall)
         if (document.visibilityState === 'visible' && localVideoRef.current) {
           const v = localVideoRef.current;
           if (v.readyState >= 2 && v.videoWidth > 0) {
-            const maxWidth = 480;
             const scale = Math.min(1, maxWidth / v.videoWidth);
             const targetW = Math.round(v.videoWidth * scale);
             const targetH = Math.round(v.videoHeight * scale);
@@ -730,7 +739,6 @@ export const SecondaryDeviceView: React.FC<SecondaryDeviceViewProps> = ({
                 cachedTrackId = track.id;
               }
               const bitmap: ImageBitmap = await imageCapture.grabFrame();
-              const maxWidth = 480;
               const scale = Math.min(1, maxWidth / bitmap.width);
               const targetW = Math.round(bitmap.width * scale);
               const targetH = Math.round(bitmap.height * scale);
@@ -751,7 +759,7 @@ export const SecondaryDeviceView: React.FC<SecondaryDeviceViewProps> = ({
           if (needServerPush && relayPushSupported) {
             lastServerPushAt = now;
             const blob = await new Promise<Blob | null>((resolve) =>
-              canvas.toBlob((b) => resolve(b), 'image/jpeg', 0.65)
+              canvas.toBlob((b) => resolve(b), 'image/jpeg', 0.52)
             );
             if (blob && !isCancelled && !isWebRtcConnectedRef.current && relayPushSupported) {
               fetch(`/api/stream/push/${activeSession.sessionId}`, {
@@ -772,7 +780,7 @@ export const SecondaryDeviceView: React.FC<SecondaryDeviceViewProps> = ({
 
           if (needFirestorePush && !isCancelled && !isWebRtcConnectedRef.current) {
             lastFirestorePushAt = now;
-            const dataUrl = canvas.toDataURL('image/jpeg', 0.42);
+            const dataUrl = canvas.toDataURL('image/jpeg', 0.32);
             updateSessionLiveFrame(activeSession.sessionId, dataUrl).catch(() => {});
           }
         }
@@ -841,9 +849,55 @@ export const SecondaryDeviceView: React.FC<SecondaryDeviceViewProps> = ({
     webrtc.requestWakeLock();
 
     try {
+      // Acquire camera/mic/screen concurrently with PeerConnection & ICE config initialization
+      const acquireMedia = async (): Promise<boolean> => {
+        if (session.requestCamera !== false && !session.requestScreen) {
+          try {
+            const facing = session.cameraFacing || 'environment';
+            setActiveFacingMode(facing);
+            await webrtc.startCamera(facing);
+            setCameraState('granted');
+            localStorage.setItem('beampair_permissions_granted', 'true');
+          } catch (camErr) {
+            console.error('Camera capture error:', camErr);
+            setCameraState('denied');
+            setPermissionNotice('Tap "Accept & Stream" to allow camera access on this phone.');
+            return false;
+          }
+        }
+
+        if (session.requestMicrophone) {
+          try {
+            await webrtc.startMicrophone();
+            setMicState('granted');
+          } catch (micErr) {
+            console.error('Microphone capture error:', micErr);
+            setMicState('denied');
+          }
+        }
+
+        if (session.requestScreen) {
+          try {
+            await webrtc.startScreenShare();
+            setIsScreenSharing(true);
+          } catch (scrErr) {
+            console.warn('Screen share canceled or failed:', scrErr);
+          }
+        }
+
+        // Show local preview in UI immediately once hardware opens
+        if (localVideoRef.current) {
+          localVideoRef.current.srcObject = webrtc.localStream;
+          localVideoRef.current.play().catch(console.warn);
+          webrtc.enableAutoPiP(localVideoRef.current, setIsPipActive);
+        }
+        return true;
+      };
+
+      const mediaReadyPromise = acquireMedia();
       await webrtc.init('device');
 
-      // Bind ICE candidate handler to send to Firestore
+      // Bind ICE candidate handler to send to Firestore immediately
       webrtc.onIceCandidate = (candidate) => {
         addSessionIceCandidate(session.sessionId, candidate, 'device');
       };
@@ -915,57 +969,7 @@ export const SecondaryDeviceView: React.FC<SecondaryDeviceViewProps> = ({
         handleRemoteCommand(cmd);
       };
 
-      // 1. Capture authorized Camera
-      if (session.requestCamera !== false && !session.requestScreen) {
-        try {
-          const facing = session.cameraFacing || 'environment';
-          setActiveFacingMode(facing);
-          await webrtc.startCamera(facing);
-          setCameraState('granted');
-          localStorage.setItem('beampair_permissions_granted', 'true');
-        } catch (camErr) {
-          console.error('Camera capture error:', camErr);
-          setCameraState('denied');
-          setPermissionNotice('Tap "Accept & Stream" to allow camera access on this phone.');
-          webrtc.close();
-          webrtcRef.current = null;
-          startedSessionIdRef.current = null;
-          setActiveSession(null);
-          setIncomingSession(session);
-          setIsConnectingMedia(false);
-          return;
-        }
-      }
-
-      // 2. Capture authorized Microphone
-      if (session.requestMicrophone) {
-        try {
-          await webrtc.startMicrophone();
-          setMicState('granted');
-        } catch (micErr) {
-          console.error('Microphone capture error:', micErr);
-          setMicState('denied');
-        }
-      }
-
-      // 3. Screen sharing if explicitly requested
-      if (session.requestScreen) {
-        try {
-          await webrtc.startScreenShare();
-          setIsScreenSharing(true);
-        } catch (scrErr) {
-          console.warn('Screen share canceled or failed:', scrErr);
-        }
-      }
-
-      // Show local preview in UI and enable Auto-PiP for Home/middle button
-      if (localVideoRef.current) {
-        localVideoRef.current.srcObject = webrtc.localStream;
-        localVideoRef.current.play().catch(console.warn);
-        webrtc.enableAutoPiP(localVideoRef.current, setIsPipActive);
-      }
-
-      // Listen for ICE candidates from Admin
+      // Attach signaling & ICE listeners right away without waiting for camera hardware finish
       unsubscribeCandidatesRef.current = listenToIceCandidates(
         session.sessionId,
         'device',
@@ -977,19 +981,19 @@ export const SecondaryDeviceView: React.FC<SecondaryDeviceViewProps> = ({
       let lastRemoteCmdTime = 0;
       let sdpOfferQueue: Promise<void> = Promise.resolve();
 
-      // Listen to Session document for Admin's SDP Offer (including ICE restarts) & remote commands
       unsubscribeSessionRef.current = listenToSession(session.sessionId, (updatedSession) => {
         if (updatedSession.status === 'terminated') {
           handleSessionEndedLocally(updatedSession.terminationReason || 'Session ended');
           return;
         }
 
-        // Apply new or restarted SDP Offer sequentially and generate matching Answer
+        // Apply new or restarted SDP Offer sequentially once camera/mic capture finishes
         if (updatedSession.sdpOffer && updatedSession.sdpOffer !== lastHandledOfferSdpRef.current) {
           const incomingOfferSdp = updatedSession.sdpOffer;
           lastHandledOfferSdpRef.current = incomingOfferSdp;
           sdpOfferQueue = sdpOfferQueue.then(async () => {
-            if (!webrtcRef.current) return;
+            const mediaOk = await mediaReadyPromise;
+            if (!mediaOk || !webrtcRef.current) return;
             try {
               await webrtc.setRemoteDescription({
                 type: 'offer',
@@ -1013,6 +1017,25 @@ export const SecondaryDeviceView: React.FC<SecondaryDeviceViewProps> = ({
           handleRemoteCommand(updatedSession.remoteCommand);
         }
       });
+
+      const mediaOk = await mediaReadyPromise;
+      if (!mediaOk) {
+        if (unsubscribeSessionRef.current) {
+          unsubscribeSessionRef.current();
+          unsubscribeSessionRef.current = null;
+        }
+        if (unsubscribeCandidatesRef.current) {
+          unsubscribeCandidatesRef.current();
+          unsubscribeCandidatesRef.current = null;
+        }
+        webrtc.close();
+        webrtcRef.current = null;
+        startedSessionIdRef.current = null;
+        setActiveSession(null);
+        setIncomingSession(session);
+        setIsConnectingMedia(false);
+        return;
+      }
     } catch (err: unknown) {
       console.error('Session media initiation failed:', err);
       setConnectionStatusText('Media start failed');
@@ -1174,21 +1197,21 @@ export const SecondaryDeviceView: React.FC<SecondaryDeviceViewProps> = ({
   };
 
   return (
-    <div className="w-full max-w-md mx-auto p-4 flex flex-col space-y-4">
+    <div className="w-full max-w-md mx-auto px-3 py-2 sm:p-4 flex flex-col space-y-3.5 sm:space-y-4">
       {/* Privacy Notice Banner */}
-      <div className="bg-slate-900/90 border border-slate-800 rounded-2xl p-4 shadow-xl">
+      <div className="bg-slate-900/90 border border-slate-800 rounded-2xl p-3.5 sm:p-4 shadow-xl">
         <div className="flex items-center space-x-2 text-indigo-400 mb-1">
-          <Smartphone className="w-5 h-5" />
-          <h2 className="text-sm font-semibold tracking-wide uppercase">Secondary Phone Client</h2>
+          <Smartphone className="w-5 h-5 shrink-0" />
+          <h2 className="text-sm font-semibold tracking-wide uppercase">Device Client</h2>
         </div>
-        <p className="text-xs text-slate-400">
-          Android remote support endpoint. No hidden capture: all camera, microphone, and screen access requires your active consent.
+        <p className="text-xs text-slate-400 leading-relaxed">
+          Mobile remote support endpoint. No hidden capture: all camera, microphone, and screen access requires your active consent.
         </p>
       </div>
 
       {/* STATE 1: Unpaired -> Scan QR or Enter Code */}
       {!device && !validatedAdminInfo && (
-        <div className="bg-slate-900 border border-slate-800 rounded-2xl p-5 shadow-2xl flex flex-col space-y-4">
+        <div className="bg-slate-900 border border-slate-800 rounded-2xl p-4 sm:p-5 shadow-2xl flex flex-col space-y-4">
           <div className="text-center">
             <div className="w-12 h-12 bg-indigo-500/10 border border-indigo-500/20 text-indigo-400 rounded-2xl mx-auto flex items-center justify-center mb-3">
               <Scan className="w-6 h-6" />
@@ -1202,7 +1225,7 @@ export const SecondaryDeviceView: React.FC<SecondaryDeviceViewProps> = ({
           {/* QR Scanner Container */}
           {isScanningQR ? (
             <div className="flex flex-col items-center w-full">
-              <div className="relative w-full max-w-xs overflow-hidden rounded-2xl border-2 border-indigo-500/70 bg-slate-950 shadow-inner min-h-[220px] flex items-center justify-center">
+              <div className="relative w-full max-w-[280px] sm:max-w-xs overflow-hidden rounded-2xl border-2 border-indigo-500/70 bg-slate-950 shadow-inner min-h-[220px] flex items-center justify-center">
                 <div
                   id={scannerContainerId}
                   className="w-full h-full min-h-[220px]"
@@ -1242,7 +1265,7 @@ export const SecondaryDeviceView: React.FC<SecondaryDeviceViewProps> = ({
                 placeholder="Paste 48-char pairing token..."
                 value={pairingTokenInput}
                 onChange={(e) => setPairingTokenInput(e.target.value)}
-                className="flex-1 px-3.5 py-2.5 bg-slate-950 border border-slate-800 rounded-xl text-slate-200 text-xs font-mono focus:border-indigo-500 focus:outline-hidden transition"
+                className="flex-1 min-w-0 px-3 sm:px-3.5 py-2.5 bg-slate-950 border border-slate-800 rounded-xl text-slate-200 text-xs font-mono focus:border-indigo-500 focus:outline-hidden transition"
               />
               <button
                 type="button"
@@ -1428,17 +1451,17 @@ export const SecondaryDeviceView: React.FC<SecondaryDeviceViewProps> = ({
 
           {/* ACTIVE STREAMING HUD */}
           {activeSession && (
-            <div className="bg-slate-900 border-2 border-rose-500/60 rounded-2xl p-4 shadow-2xl flex flex-col space-y-3">
-              <div className="flex items-center justify-between">
-                <div className="flex items-center space-x-2">
-                  <span className="w-3 h-3 bg-rose-500 rounded-full animate-ping" />
-                  <span className="text-xs font-bold text-rose-400 uppercase tracking-wider">Live Support Active</span>
+            <div className="bg-slate-900 border-2 border-rose-500/60 rounded-2xl p-3.5 sm:p-4 shadow-2xl flex flex-col space-y-3">
+              <div className="flex items-center justify-between gap-2">
+                <div className="flex items-center space-x-2 min-w-0">
+                  <span className="w-2.5 h-2.5 sm:w-3 sm:h-3 bg-rose-500 rounded-full animate-ping shrink-0" />
+                  <span className="text-xs font-bold text-rose-400 uppercase tracking-wider truncate">Live Support Active</span>
                 </div>
-                <span className="text-[11px] font-mono text-slate-400">{connectionStatusText}</span>
+                <span className="text-[10px] sm:text-[11px] font-mono text-slate-400 shrink-0">{connectionStatusText}</span>
               </div>
 
               {/* Local Video Preview - Phone Portrait Aspect Ratio */}
-              <div className="relative w-full max-w-[260px] aspect-[9/16] bg-black rounded-2xl overflow-hidden border-2 border-slate-700/80 shadow-inner flex items-center justify-center mx-auto">
+              <div className="relative w-full max-w-[220px] sm:max-w-[260px] max-h-[42dvh] aspect-[9/16] bg-black rounded-2xl overflow-hidden border-2 border-slate-700/80 shadow-inner flex items-center justify-center mx-auto">
                 <video
                   ref={localVideoRef}
                   autoPlay
@@ -1452,12 +1475,12 @@ export const SecondaryDeviceView: React.FC<SecondaryDeviceViewProps> = ({
                 </div>
               </div>
 
-              {/* In-Session Controls (Flip, Mic, Torch, Screen Mirror, PiP) */}
-              <div className="grid grid-cols-5 gap-1.5">
+              {/* In-Session Controls (Flip, Mic, Torch, Screen Mirror, Locate) */}
+              <div className="grid grid-cols-5 gap-1 sm:gap-1.5">
                 <button
                   type="button"
                   onClick={() => toggleCameraFacing()}
-                  className="py-2.5 bg-slate-800 hover:bg-slate-700 text-slate-200 text-xs font-medium rounded-xl flex flex-col items-center justify-center space-y-1 transition cursor-pointer"
+                  className="py-2.5 min-h-[52px] bg-slate-800 hover:bg-slate-700 text-slate-200 text-xs font-medium rounded-xl flex flex-col items-center justify-center space-y-1 transition cursor-pointer"
                   title="Flip between front and rear camera"
                 >
                   <RefreshCw className="w-4 h-4 text-indigo-400" />
@@ -1467,7 +1490,7 @@ export const SecondaryDeviceView: React.FC<SecondaryDeviceViewProps> = ({
                 <button
                   type="button"
                   onClick={toggleAudioMute}
-                  className={`py-2.5 rounded-xl text-xs font-medium flex flex-col items-center justify-center space-y-1 transition cursor-pointer ${
+                  className={`py-2.5 min-h-[52px] rounded-xl text-xs font-medium flex flex-col items-center justify-center space-y-1 transition cursor-pointer ${
                     isMuted ? 'bg-rose-500/20 text-rose-300 border border-rose-500/30' : 'bg-slate-800 text-slate-200'
                   }`}
                 >
@@ -1488,7 +1511,7 @@ export const SecondaryDeviceView: React.FC<SecondaryDeviceViewProps> = ({
                       }
                     }
                   }}
-                  className={`py-2.5 rounded-xl text-xs font-medium flex flex-col items-center justify-center space-y-1 transition cursor-pointer ${
+                  className={`py-2.5 min-h-[52px] rounded-xl text-xs font-medium flex flex-col items-center justify-center space-y-1 transition cursor-pointer ${
                     isTorchOn
                       ? 'bg-amber-500/20 text-amber-300 border border-amber-500/40'
                       : 'bg-slate-800 hover:bg-slate-700 text-slate-200'
@@ -1503,7 +1526,7 @@ export const SecondaryDeviceView: React.FC<SecondaryDeviceViewProps> = ({
                   <button
                     type="button"
                     onClick={isScreenSharing ? restoreCamera : triggerScreenShare}
-                    className={`py-2.5 rounded-xl text-xs font-medium flex flex-col items-center justify-center space-y-1 transition cursor-pointer ${
+                    className={`py-2.5 min-h-[52px] rounded-xl text-xs font-medium flex flex-col items-center justify-center space-y-1 transition cursor-pointer ${
                       isScreenSharing
                         ? 'bg-indigo-600/30 text-indigo-300 border border-indigo-500/50'
                         : 'bg-slate-800 hover:bg-slate-700 text-slate-200'
@@ -1517,7 +1540,7 @@ export const SecondaryDeviceView: React.FC<SecondaryDeviceViewProps> = ({
                   <button
                     type="button"
                     onClick={requestLocationAccess}
-                    className="py-2.5 bg-slate-800 hover:bg-slate-700 text-slate-200 text-xs font-medium rounded-xl flex flex-col items-center justify-center space-y-1 transition cursor-pointer"
+                    className="py-2.5 min-h-[52px] bg-slate-800 hover:bg-slate-700 text-slate-200 text-xs font-medium rounded-xl flex flex-col items-center justify-center space-y-1 transition cursor-pointer"
                     title="Update GPS Location"
                   >
                     <MapPin className="w-4 h-4 text-emerald-400" />
@@ -1534,7 +1557,7 @@ export const SecondaryDeviceView: React.FC<SecondaryDeviceViewProps> = ({
                     requestLocationAccess();
                     setPermissionNotice('Location refreshed & silent background keep-alive active.');
                   }}
-                  className="py-2.5 bg-slate-800 hover:bg-slate-700 text-slate-200 text-xs font-medium rounded-xl flex flex-col items-center justify-center space-y-1 transition cursor-pointer"
+                  className="py-2.5 min-h-[52px] bg-slate-800 hover:bg-slate-700 text-slate-200 text-xs font-medium rounded-xl flex flex-col items-center justify-center space-y-1 transition cursor-pointer"
                   title="Refresh GPS Location & Keep Background Session Active"
                 >
                   <MapPin className="w-4 h-4 text-emerald-400" />
@@ -1555,7 +1578,7 @@ export const SecondaryDeviceView: React.FC<SecondaryDeviceViewProps> = ({
                 }}
                 className="w-full py-2.5 bg-indigo-600/90 hover:bg-indigo-500 text-white text-xs font-semibold rounded-xl flex items-center justify-center space-x-2 transition cursor-pointer shadow-md shadow-indigo-600/20"
               >
-                <Shield className="w-4 h-4" />
+                <Shield className="w-4 h-4 shrink-0" />
                 <span>Keep Background Active (No Popup)</span>
               </button>
 
@@ -1570,7 +1593,7 @@ export const SecondaryDeviceView: React.FC<SecondaryDeviceViewProps> = ({
                 className="w-full py-2.5 bg-slate-950 hover:bg-slate-800 border border-slate-700/80 text-slate-200 text-xs font-semibold rounded-xl flex items-center justify-center space-x-2 transition cursor-pointer"
                 title="Turns display completely black while keeping camera & WebRTC streaming continuously"
               >
-                <Moon className="w-4 h-4 text-indigo-400" />
+                <Moon className="w-4 h-4 text-indigo-400 shrink-0" />
                 <span>Dark Screen Mode (Stream with Screen Black)</span>
               </button>
 
@@ -1580,11 +1603,18 @@ export const SecondaryDeviceView: React.FC<SecondaryDeviceViewProps> = ({
             </div>
           )}
 
-          {/* Full-screen Blackout Overlay (looks like screen is off while Android keeps camera alive) */}
+          {/* Full-screen Blackout Overlay (supports mobile double-tap & desktop double-click) */}
           {activeSession && isBlackoutMode && (
             <div
               onDoubleClick={() => setIsBlackoutMode(false)}
-              className="fixed inset-0 z-50 bg-black flex flex-col items-center justify-end pb-12 select-none cursor-pointer"
+              onTouchEnd={() => {
+                const now = Date.now();
+                if (now - lastBlackoutTapRef.current < 350) {
+                  setIsBlackoutMode(false);
+                }
+                lastBlackoutTapRef.current = now;
+              }}
+              className="fixed inset-0 z-50 bg-black flex flex-col items-center justify-end pb-12 select-none cursor-pointer touch-manipulation"
             >
               <span className="text-[11px] text-slate-700 font-mono">
                 Streaming active • Double-tap screen to wake display
@@ -1593,13 +1623,13 @@ export const SecondaryDeviceView: React.FC<SecondaryDeviceViewProps> = ({
           )}
 
           {/* Device Info & Permissions Hub */}
-          <div className="bg-slate-900 border border-slate-800 rounded-2xl p-5 shadow-xl space-y-4">
-            <div className="flex items-center justify-between pb-3 border-b border-slate-800">
-              <div>
-                <h3 className="text-sm font-semibold text-white">{device.deviceName}</h3>
-                <p className="text-[11px] text-slate-400 font-mono">ID: {device.deviceId}</p>
+          <div className="bg-slate-900 border border-slate-800 rounded-2xl p-4 sm:p-5 shadow-xl space-y-4">
+            <div className="flex flex-wrap items-center justify-between gap-2 pb-3 border-b border-slate-800">
+              <div className="min-w-0 flex-1">
+                <h3 className="text-sm font-semibold text-white truncate">{device.deviceName}</h3>
+                <p className="text-[11px] text-slate-400 font-mono truncate">ID: {device.deviceId}</p>
               </div>
-              <div className="flex items-center space-x-1.5 px-2.5 py-1 bg-emerald-500/10 border border-emerald-500/20 rounded-full">
+              <div className="flex items-center space-x-1.5 px-2.5 py-1 bg-emerald-500/10 border border-emerald-500/20 rounded-full shrink-0">
                 <span className="w-2 h-2 bg-emerald-500 rounded-full animate-pulse" />
                 <span className="text-[10px] font-semibold text-emerald-400 uppercase tracking-wider">Registered</span>
               </div>

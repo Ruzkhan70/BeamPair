@@ -499,9 +499,58 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
   ];
 
   return (
-    <div className="flex-1 flex flex-col lg:flex-row min-h-[calc(100vh-4rem)] bg-slate-950 text-slate-100">
-      {/* SIDEBAR NAVIGATION (Desktop & Tablet) */}
-      <aside className="w-full lg:w-64 bg-slate-900/90 border-b lg:border-b-0 lg:border-r border-slate-800 p-4 flex flex-col justify-between shrink-0">
+    <div className="flex-1 flex flex-col lg:flex-row min-h-[calc(100dvh-4rem)] bg-slate-950 text-slate-100 min-w-0">
+      {/* MOBILE / TABLET HORIZONTAL NAVIGATION BAR */}
+      <div className="lg:hidden bg-slate-900/95 border-b border-slate-800 shrink-0">
+        <div className="px-3 pt-2.5 pb-1.5 flex items-center justify-between gap-2">
+          <div className="flex items-center space-x-2 min-w-0">
+            <span className="w-2 h-2 rounded-full bg-emerald-400 animate-pulse shrink-0" />
+            <span className="text-xs font-semibold text-white truncate">Admin Console</span>
+            <span className="px-1.5 py-0.5 bg-emerald-500/15 border border-emerald-500/30 text-emerald-300 text-[9px] font-mono rounded-md font-semibold shrink-0">
+              LIVE
+            </span>
+          </div>
+          <button
+            onClick={() => setIsPairingModalOpen(true)}
+            className="px-2.5 py-1.5 bg-indigo-600 hover:bg-indigo-500 text-white text-[11px] font-semibold rounded-xl flex items-center space-x-1.5 transition cursor-pointer shrink-0 shadow-sm shadow-indigo-600/20"
+          >
+            <QrCode className="w-3.5 h-3.5" />
+            <span>Quick Pair</span>
+          </button>
+        </div>
+
+        <nav className="flex items-center gap-1.5 px-3 pb-2.5 overflow-x-auto scrollbar-none">
+          {navigationItems.map((item) => {
+            const isActive = activeTab === item.id;
+            return (
+              <button
+                key={item.id}
+                onClick={() => setActiveTab(item.id)}
+                className={`shrink-0 whitespace-nowrap flex items-center space-x-1.5 px-3 py-2 rounded-xl text-xs font-medium transition cursor-pointer ${
+                  isActive
+                    ? 'bg-indigo-600 text-white shadow-md shadow-indigo-600/25 font-semibold'
+                    : 'bg-slate-950/70 border border-slate-800 text-slate-400 hover:text-slate-200'
+                }`}
+              >
+                {item.icon}
+                <span>{item.label}</span>
+                {item.badge !== undefined && (
+                  <span
+                    className={`text-[10px] px-1.5 py-0.5 rounded-full font-mono font-semibold ${
+                      isActive ? 'bg-white/20 text-white' : 'bg-slate-800 text-slate-400'
+                    }`}
+                  >
+                    {item.badge}
+                  </span>
+                )}
+              </button>
+            );
+          })}
+        </nav>
+      </div>
+
+      {/* SIDEBAR NAVIGATION (Desktop lg+) */}
+      <aside className="hidden lg:flex lg:flex-col lg:w-64 bg-slate-900/90 border-r border-slate-800 p-4 justify-between shrink-0">
         <div className="space-y-6">
           {/* Admin Header Status */}
           <div className="px-3 py-2 bg-slate-950/80 border border-slate-800/90 rounded-xl flex items-center justify-between">
@@ -551,7 +600,7 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
         </div>
 
         {/* Quick Footer Action */}
-        <div className="pt-6 border-t border-slate-800/80 mt-6 lg:mt-0 space-y-2.5">
+        <div className="pt-6 border-t border-slate-800/80 space-y-2.5">
           <button
             onClick={() => setIsPairingModalOpen(true)}
             className="w-full py-2.5 bg-indigo-600/90 hover:bg-indigo-600 text-white text-xs font-semibold rounded-xl flex items-center justify-center space-x-2 transition shadow-lg shadow-indigo-600/20 cursor-pointer"
@@ -566,32 +615,32 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
       </aside>
 
       {/* MAIN CONTENT AREA */}
-      <main className="flex-1 p-4 sm:p-6 lg:p-8 overflow-y-auto max-w-7xl w-full mx-auto space-y-6">
+      <main className="flex-1 min-w-0 p-3 sm:p-6 lg:p-8 overflow-y-auto max-w-7xl w-full mx-auto space-y-5 sm:space-y-6">
         {/* ============================================================ */}
         {/* TAB 1: OVERVIEW */}
         {/* ============================================================ */}
         {activeTab === 'overview' && (
-          <div className="space-y-6 animate-fade-in">
+          <div className="space-y-5 sm:space-y-6 animate-fade-in">
             {/* Top Metric Cards */}
-            <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-5 gap-4">
-              <div className="bg-slate-900/90 border border-slate-800 rounded-2xl p-4 shadow-lg flex items-center space-x-3.5">
-                <div className="p-3 bg-indigo-500/10 border border-indigo-500/20 text-indigo-400 rounded-xl">
-                  <Smartphone className="w-5 h-5" />
+            <div className="grid grid-cols-2 lg:grid-cols-5 gap-3 sm:gap-4">
+              <div className="bg-slate-900/90 border border-slate-800 rounded-2xl p-3.5 sm:p-4 shadow-lg flex items-center space-x-3">
+                <div className="p-2.5 sm:p-3 bg-indigo-500/10 border border-indigo-500/20 text-indigo-400 rounded-xl shrink-0">
+                  <Smartphone className="w-4 h-4 sm:w-5 sm:h-5" />
                 </div>
-                <div>
-                  <span className="text-xs text-slate-400 font-medium">Registered</span>
-                  <h4 className="text-2xl font-bold text-white tracking-tight">{devices.length}</h4>
+                <div className="min-w-0">
+                  <span className="text-[11px] sm:text-xs text-slate-400 font-medium block truncate">Registered</span>
+                  <h4 className="text-xl sm:text-2xl font-bold text-white tracking-tight">{devices.length}</h4>
                 </div>
               </div>
 
-              <div className="bg-slate-900/90 border border-slate-800 rounded-2xl p-4 shadow-lg flex items-center space-x-3.5">
-                <div className="p-3 bg-emerald-500/10 border border-emerald-500/20 text-emerald-400 rounded-xl">
-                  <Radio className="w-5 h-5" />
+              <div className="bg-slate-900/90 border border-slate-800 rounded-2xl p-3.5 sm:p-4 shadow-lg flex items-center space-x-3">
+                <div className="p-2.5 sm:p-3 bg-emerald-500/10 border border-emerald-500/20 text-emerald-400 rounded-xl shrink-0">
+                  <Radio className="w-4 h-4 sm:w-5 sm:h-5" />
                 </div>
-                <div>
-                  <span className="text-xs text-slate-400 font-medium">Online</span>
+                <div className="min-w-0">
+                  <span className="text-[11px] sm:text-xs text-slate-400 font-medium block truncate">Online</span>
                   <div className="flex items-center space-x-2">
-                    <h4 className="text-2xl font-bold text-emerald-400 tracking-tight">{onlineDevicesCount}</h4>
+                    <h4 className="text-xl sm:text-2xl font-bold text-emerald-400 tracking-tight">{onlineDevicesCount}</h4>
                     <span className="flex h-2 w-2 relative">
                       <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-emerald-400 opacity-75" />
                       <span className="relative inline-flex rounded-full h-2 w-2 bg-emerald-500" />
@@ -602,58 +651,58 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
 
               <div
                 onClick={() => setActiveTab('map')}
-                className="bg-slate-900/90 hover:bg-slate-850 border border-slate-800 hover:border-emerald-500/40 rounded-2xl p-4 shadow-lg flex items-center space-x-3.5 transition cursor-pointer group"
+                className="bg-slate-900/90 hover:bg-slate-850 border border-slate-800 hover:border-emerald-500/40 rounded-2xl p-3.5 sm:p-4 shadow-lg flex items-center space-x-3 transition cursor-pointer group"
               >
-                <div className="p-3 bg-emerald-500/10 border border-emerald-500/20 text-emerald-400 rounded-xl group-hover:scale-105 transition">
-                  <MapPin className="w-5 h-5" />
+                <div className="p-2.5 sm:p-3 bg-emerald-500/10 border border-emerald-500/20 text-emerald-400 rounded-xl group-hover:scale-105 transition shrink-0">
+                  <MapPin className="w-4 h-4 sm:w-5 sm:h-5" />
                 </div>
-                <div>
-                  <span className="text-xs text-slate-400 font-medium">GPS Located</span>
+                <div className="min-w-0">
+                  <span className="text-[11px] sm:text-xs text-slate-400 font-medium block truncate">GPS Located</span>
                   <div className="flex items-center space-x-1.5">
-                    <h4 className="text-2xl font-bold text-white tracking-tight">{devicesWithLocation.length}</h4>
-                    <span className="text-[10px] text-emerald-400 font-medium ml-1 flex items-center">
+                    <h4 className="text-xl sm:text-2xl font-bold text-white tracking-tight">{devicesWithLocation.length}</h4>
+                    <span className="text-[10px] text-emerald-400 font-medium ml-1 flex items-center whitespace-nowrap">
                       Map &rarr;
                     </span>
                   </div>
                 </div>
               </div>
 
-              <div className="bg-slate-900/90 border border-slate-800 rounded-2xl p-4 shadow-lg flex items-center space-x-3.5">
-                <div className="p-3 bg-amber-500/10 border border-amber-500/20 text-amber-400 rounded-xl">
-                  <History className="w-5 h-5" />
+              <div className="bg-slate-900/90 border border-slate-800 rounded-2xl p-3.5 sm:p-4 shadow-lg flex items-center space-x-3">
+                <div className="p-2.5 sm:p-3 bg-amber-500/10 border border-amber-500/20 text-amber-400 rounded-xl shrink-0">
+                  <History className="w-4 h-4 sm:w-5 sm:h-5" />
                 </div>
-                <div>
-                  <span className="text-xs text-slate-400 font-medium">Sessions</span>
-                  <h4 className="text-2xl font-bold text-white tracking-tight">{sessionHistory.length}</h4>
+                <div className="min-w-0">
+                  <span className="text-[11px] sm:text-xs text-slate-400 font-medium block truncate">Sessions</span>
+                  <h4 className="text-xl sm:text-2xl font-bold text-white tracking-tight">{sessionHistory.length}</h4>
                 </div>
               </div>
 
-              <div className="bg-slate-900/90 border border-slate-800 rounded-2xl p-4 shadow-lg flex items-center space-x-3.5">
-                <div className="p-3 bg-rose-500/10 border border-rose-500/20 text-rose-400 rounded-xl">
-                  <ShieldCheck className="w-5 h-5" />
+              <div className="col-span-2 lg:col-span-1 bg-slate-900/90 border border-slate-800 rounded-2xl p-3.5 sm:p-4 shadow-lg flex items-center space-x-3">
+                <div className="p-2.5 sm:p-3 bg-rose-500/10 border border-rose-500/20 text-rose-400 rounded-xl shrink-0">
+                  <ShieldCheck className="w-4 h-4 sm:w-5 sm:h-5" />
                 </div>
-                <div>
-                  <span className="text-xs text-slate-400 font-medium">Security Audits</span>
-                  <h4 className="text-2xl font-bold text-white tracking-tight">{auditLogs.length}</h4>
+                <div className="min-w-0">
+                  <span className="text-[11px] sm:text-xs text-slate-400 font-medium block truncate">Security Audits</span>
+                  <h4 className="text-xl sm:text-2xl font-bold text-white tracking-tight">{auditLogs.length}</h4>
                 </div>
               </div>
             </div>
 
             {/* Quick Actions & Recent Devices Spotlight */}
-            <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
+            <div className="grid grid-cols-1 lg:grid-cols-3 gap-4 sm:gap-6">
               {/* Quick Pair Card */}
-              <div className="bg-gradient-to-br from-indigo-950/40 via-slate-900 to-slate-900 border border-indigo-500/30 rounded-2xl p-6 shadow-xl flex flex-col justify-between">
+              <div className="bg-gradient-to-br from-indigo-950/40 via-slate-900 to-slate-900 border border-indigo-500/30 rounded-2xl p-5 sm:p-6 shadow-xl flex flex-col justify-between">
                 <div className="space-y-3">
                   <div className="inline-flex items-center space-x-1.5 px-2.5 py-1 bg-indigo-500/20 border border-indigo-500/30 text-indigo-300 text-[11px] font-medium rounded-lg">
                     <Zap className="w-3.5 h-3.5" />
                     <span>Zero Play Store App Required</span>
                   </div>
-                  <h3 className="text-base font-bold text-white tracking-tight">Pair Any Android Phone</h3>
+                  <h3 className="text-base font-bold text-white tracking-tight">Pair Any Mobile Phone</h3>
                   <p className="text-xs text-slate-400 leading-relaxed">
-                    Generate a single-use cryptographic QR code. The phone user scans it using Google Lens, Samsung Camera, or Android Chrome to pair immediately.
+                    Generate a single-use cryptographic QR code. The phone user scans it using their camera, Google Lens, or mobile browser to pair immediately.
                   </p>
                 </div>
-                <div className="pt-6">
+                <div className="pt-5 sm:pt-6">
                   <button
                     onClick={() => setActiveTab('pairing')}
                     className="w-full py-2.5 bg-indigo-600 hover:bg-indigo-500 text-white text-xs font-semibold rounded-xl flex items-center justify-center space-x-2 transition shadow-lg shadow-indigo-600/25 cursor-pointer"
@@ -665,15 +714,15 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
               </div>
 
               {/* Online Devices Preview */}
-              <div className="lg:col-span-2 bg-slate-900/90 border border-slate-800 rounded-2xl p-6 shadow-xl space-y-4">
-                <div className="flex items-center justify-between">
+              <div className="lg:col-span-2 bg-slate-900/90 border border-slate-800 rounded-2xl p-4 sm:p-6 shadow-xl space-y-4">
+                <div className="flex items-center justify-between gap-2">
                   <h3 className="text-sm font-semibold text-white flex items-center space-x-2">
-                    <Smartphone className="w-4 h-4 text-indigo-400" />
+                    <Smartphone className="w-4 h-4 text-indigo-400 shrink-0" />
                     <span>Paired Devices Status</span>
                   </h3>
                   <button
                     onClick={() => setActiveTab('devices')}
-                    className="text-xs text-indigo-400 hover:text-indigo-300 flex items-center space-x-1 cursor-pointer font-medium"
+                    className="text-xs text-indigo-400 hover:text-indigo-300 flex items-center space-x-1 cursor-pointer font-medium shrink-0"
                   >
                     <span>View All ({devices.length})</span>
                     <ChevronRight className="w-3.5 h-3.5" />
@@ -682,7 +731,7 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
 
                 {devices.length === 0 ? (
                   <div className="py-8 text-center text-xs text-slate-400">
-                    No devices paired yet. Click &quot;Open Pairing Console&quot; to pair your first Android phone.
+                    No devices paired yet. Click &quot;Open Pairing Console&quot; to pair your first phone.
                   </div>
                 ) : (
                   <div className="space-y-2.5">
@@ -691,25 +740,25 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
                       return (
                         <div
                           key={d.deviceId}
-                          className="p-3 bg-slate-950/70 border border-slate-800 rounded-xl flex items-center justify-between"
+                          className="p-3 bg-slate-950/70 border border-slate-800 rounded-xl flex flex-col sm:flex-row sm:items-center justify-between gap-3"
                         >
-                          <div className="flex items-center space-x-3">
+                          <div className="flex items-center space-x-3 min-w-0">
                             <div
-                              className={`p-2 rounded-lg ${
+                              className={`p-2 rounded-lg shrink-0 ${
                                 isOnline ? 'bg-emerald-500/10 text-emerald-400' : 'bg-slate-800 text-slate-400'
                               }`}
                             >
                               <Smartphone className="w-4 h-4" />
                             </div>
-                            <div>
-                              <span className="text-xs font-bold text-white block">{d.deviceName}</span>
-                              <span className="text-[10px] text-slate-400 font-mono truncate max-w-[180px] block">
+                            <div className="min-w-0">
+                              <span className="text-xs font-bold text-white block truncate">{d.deviceName}</span>
+                              <span className="text-[10px] text-slate-400 font-mono truncate block">
                                 {d.deviceId}
                               </span>
                             </div>
                           </div>
 
-                          <div className="flex items-center space-x-3">
+                          <div className="flex items-center justify-between sm:justify-end space-x-2.5 shrink-0">
                             {isOnline ? (
                               <span className="px-2 py-0.5 bg-emerald-500/10 border border-emerald-500/20 text-emerald-400 text-[10px] font-semibold rounded-full flex items-center space-x-1">
                                 <span className="w-1.5 h-1.5 rounded-full bg-emerald-400 animate-ping" />
@@ -742,17 +791,17 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
             </div>
 
             {/* Recent Security Activity */}
-            <div className="bg-slate-900/90 border border-slate-800 rounded-2xl p-6 shadow-xl space-y-4">
-              <div className="flex items-center justify-between">
+            <div className="bg-slate-900/90 border border-slate-800 rounded-2xl p-4 sm:p-6 shadow-xl space-y-4">
+              <div className="flex items-center justify-between gap-2">
                 <h3 className="text-sm font-semibold text-white flex items-center space-x-2">
-                  <Shield className="w-4 h-4 text-emerald-400" />
+                  <Shield className="w-4 h-4 text-emerald-400 shrink-0" />
                   <span>Recent Security Events</span>
                 </h3>
                 <button
                   onClick={() => setActiveTab('audit')}
-                  className="text-xs text-indigo-400 hover:text-indigo-300 flex items-center space-x-1 cursor-pointer font-medium"
+                  className="text-xs text-indigo-400 hover:text-indigo-300 flex items-center space-x-1 cursor-pointer font-medium shrink-0"
                 >
-                  <span>View Complete Audit Log</span>
+                  <span>Full Audit</span>
                   <ChevronRight className="w-3.5 h-3.5" />
                 </button>
               </div>
@@ -766,13 +815,13 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
                   {auditLogs.slice(0, 4).map((log, idx) => (
                     <div
                       key={log.id || idx}
-                      className="p-3 bg-slate-950/60 border border-slate-800/80 rounded-xl flex items-center justify-between text-xs"
+                      className="p-3 bg-slate-950/60 border border-slate-800/80 rounded-xl flex flex-col sm:flex-row sm:items-center justify-between gap-1.5 text-xs"
                     >
-                      <div className="flex items-center space-x-2.5">
-                        <span className="px-2 py-0.5 bg-slate-800 text-indigo-400 font-mono text-[10px] rounded-md font-semibold">
+                      <div className="flex flex-wrap items-center gap-2 min-w-0">
+                        <span className="px-2 py-0.5 bg-slate-800 text-indigo-400 font-mono text-[10px] rounded-md font-semibold shrink-0">
                           {log.eventType}
                         </span>
-                        <span className="text-slate-300">{log.details || 'Event logged'}</span>
+                        <span className="text-slate-300 text-[11px] sm:text-xs break-words">{log.details || 'Event logged'}</span>
                       </div>
                       <span className="text-[11px] text-slate-500 font-mono shrink-0">
                         {new Date(log.timestamp).toLocaleTimeString()}
@@ -792,7 +841,7 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
           <div className="space-y-4 animate-fade-in">
             {/* Search and Filters Bar */}
             <div className="flex flex-col sm:flex-row items-stretch sm:items-center justify-between gap-3">
-              <div className="relative max-w-sm flex-1">
+              <div className="relative w-full sm:max-w-sm flex-1">
                 <Search className="w-4 h-4 text-slate-400 absolute left-3 top-1/2 -translate-y-1/2" />
                 <input
                   type="text"
@@ -803,12 +852,12 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
                 />
               </div>
 
-              <div className="flex items-center space-x-1.5 p-1 bg-slate-900 border border-slate-800 rounded-xl">
+              <div className="flex items-center space-x-1.5 p-1 bg-slate-900 border border-slate-800 rounded-xl overflow-x-auto scrollbar-none">
                 {(['all', 'online', 'offline', 'revoked'] as const).map((filter) => (
                   <button
                     key={filter}
                     onClick={() => setDeviceFilter(filter)}
-                    className={`px-3 py-1 text-[11px] font-semibold rounded-lg capitalize transition cursor-pointer ${
+                    className={`flex-1 sm:flex-initial px-3 py-1.5 text-[11px] font-semibold rounded-lg capitalize transition cursor-pointer whitespace-nowrap ${
                       deviceFilter === filter
                         ? 'bg-indigo-600 text-white'
                         : 'text-slate-400 hover:text-slate-200'
@@ -850,7 +899,7 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
                   return (
                     <div
                       key={device.deviceId}
-                      className={`bg-slate-900/90 border rounded-2xl p-5 shadow-xl flex flex-col justify-between transition ${
+                      className={`bg-slate-900/90 border rounded-2xl p-4 sm:p-5 shadow-xl flex flex-col justify-between transition ${
                         device.isRevoked
                           ? 'border-rose-900/40 opacity-70'
                           : 'border-slate-800 hover:border-slate-700'
@@ -858,24 +907,24 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
                     >
                       <div>
                         {/* Device Header */}
-                        <div className="flex items-start justify-between mb-3">
-                          <div className="flex items-center space-x-3">
+                        <div className="flex items-start justify-between gap-2 mb-3">
+                          <div className="flex items-center space-x-3 min-w-0 flex-1">
                             <div
-                              className={`p-2.5 rounded-xl ${
+                              className={`p-2.5 rounded-xl shrink-0 ${
                                 isOnline ? 'bg-emerald-500/10 text-emerald-400' : 'bg-slate-800 text-slate-400'
                               }`}
                             >
                               <Smartphone className="w-5 h-5" />
                             </div>
-                            <div>
+                            <div className="min-w-0 flex-1">
                               <div className="flex items-center space-x-1.5">
-                                <h4 className="text-sm font-bold text-white tracking-wide">{device.deviceName}</h4>
+                                <h4 className="text-sm font-bold text-white tracking-wide truncate">{device.deviceName}</h4>
                                 <button
                                   onClick={() => {
                                     setDeviceToRename(device);
                                     setNewDeviceName(device.deviceName);
                                   }}
-                                  className="text-slate-500 hover:text-slate-300 transition p-0.5 cursor-pointer"
+                                  className="text-slate-500 hover:text-slate-300 transition p-0.5 cursor-pointer shrink-0"
                                   title="Rename device"
                                 >
                                   <Edit2 className="w-3 h-3" />
@@ -883,7 +932,7 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
                               </div>
                               <span
                                 onClick={() => handleCopy(device.deviceId, device.deviceId)}
-                                className="text-[10px] font-mono text-slate-400 truncate max-w-[160px] block cursor-pointer hover:text-indigo-300"
+                                className="text-[10px] font-mono text-slate-400 truncate block cursor-pointer hover:text-indigo-300"
                                 title="Click to copy Device ID"
                               >
                                 {device.deviceId}{' '}
@@ -1003,25 +1052,25 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
         {/* TAB: GPS MAP & GEOLOCATION VIEWER */}
         {/* ============================================================ */}
         {activeTab === 'map' && (
-          <div className="space-y-4 animate-fade-in">
-            <div className="flex flex-wrap items-center justify-between gap-3 bg-slate-900/90 border border-slate-800 rounded-2xl px-6 py-4 shadow-xl">
-              <div className="flex items-center space-x-3">
-                <div className="p-2.5 bg-emerald-500/10 border border-emerald-500/20 text-emerald-400 rounded-xl">
-                  <MapPin className="w-5 h-5" />
+          <div className="space-y-3 sm:space-y-4 animate-fade-in">
+            <div className="flex flex-wrap items-center justify-between gap-2.5 bg-slate-900/90 border border-slate-800 rounded-2xl px-4 py-3 sm:px-6 sm:py-4 shadow-xl">
+              <div className="flex items-center space-x-3 min-w-0">
+                <div className="p-2 sm:p-2.5 bg-emerald-500/10 border border-emerald-500/20 text-emerald-400 rounded-xl shrink-0">
+                  <MapPin className="w-4 h-4 sm:w-5 sm:h-5" />
                 </div>
-                <div>
-                  <h2 className="text-sm font-bold text-white tracking-wide">
-                    Android Phone Geolocation & Precision GPS Map
+                <div className="min-w-0">
+                  <h2 className="text-xs sm:text-sm font-bold text-white tracking-wide truncate">
+                    Phone Geolocation &amp; Precision GPS Map
                   </h2>
-                  <p className="text-xs text-slate-400">
+                  <p className="text-[11px] sm:text-xs text-slate-400 hidden sm:block">
                     Real-time GPS coordinate acquisition from paired phones with satellite / street mapping
                   </p>
                 </div>
               </div>
               <div className="flex items-center space-x-2">
-                <span className="px-3 py-1 bg-slate-800 border border-slate-700/80 rounded-xl text-xs font-mono text-emerald-400 flex items-center space-x-1.5">
+                <span className="px-2.5 py-1 bg-slate-800 border border-slate-700/80 rounded-xl text-[11px] sm:text-xs font-mono text-emerald-400 flex items-center space-x-1.5">
                   <span className="w-2 h-2 rounded-full bg-emerald-400 animate-pulse" />
-                  <span>{devicesWithLocation.length} / {devices.length} Devices with GPS Fix</span>
+                  <span>{devicesWithLocation.length} / {devices.length} GPS Fix</span>
                 </span>
               </div>
             </div>
@@ -1031,7 +1080,7 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
               selectedDeviceId={selectedDeviceIdForMap}
               onSelectDevice={(d) => setSelectedDeviceIdForMap(d.deviceId)}
               onRequestLocationPing={handleRequestLocationPing}
-              className="h-[calc(100vh-14rem)] min-h-[540px] shadow-2xl"
+              className="h-[68dvh] min-h-[430px] sm:h-[calc(100vh-14rem)] sm:min-h-[540px] shadow-2xl"
             />
           </div>
         )}
@@ -1040,14 +1089,14 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
         {/* TAB 3: PAIR NEW DEVICE (EMBEDDED CONSOLE) */}
         {/* ============================================================ */}
         {activeTab === 'pairing' && (
-          <div className="max-w-2xl mx-auto bg-slate-900/90 border border-slate-800 rounded-2xl p-6 sm:p-8 shadow-2xl space-y-6 animate-fade-in">
+          <div className="max-w-2xl mx-auto bg-slate-900/90 border border-slate-800 rounded-2xl p-4 sm:p-8 shadow-2xl space-y-5 sm:space-y-6 animate-fade-in">
             <div className="text-center space-y-2">
-              <div className="w-14 h-14 bg-indigo-500/10 border border-indigo-500/20 text-indigo-400 rounded-2xl mx-auto flex items-center justify-center">
-                <QrCode className="w-7 h-7" />
+              <div className="w-12 h-12 sm:w-14 sm:h-14 bg-indigo-500/10 border border-indigo-500/20 text-indigo-400 rounded-2xl mx-auto flex items-center justify-center">
+                <QrCode className="w-6 h-6 sm:w-7 sm:h-7" />
               </div>
-              <h3 className="text-lg font-bold text-white tracking-tight">Pair Any Android Smartphone</h3>
+              <h3 className="text-base sm:text-lg font-bold text-white tracking-tight">Pair Any Mobile Smartphone</h3>
               <p className="text-xs text-slate-400 max-w-md mx-auto leading-relaxed">
-                Scan the cryptographic QR code below using Google Lens, Samsung Camera, or Android Chrome. Once paired, the device will be registered to your dashboard.
+                Scan the cryptographic QR code below using Camera, Google Lens, or a mobile browser. Once paired, the device will be registered to your dashboard.
               </p>
             </div>
 
@@ -1133,17 +1182,17 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
             {/* QR Code display */}
             <div className="flex flex-col items-center justify-center py-2">
               {embedLoading ? (
-                <div className="w-64 h-64 bg-slate-950 border border-slate-800 rounded-2xl flex flex-col items-center justify-center space-y-3">
+                <div className="w-56 h-56 sm:w-64 sm:h-64 bg-slate-950 border border-slate-800 rounded-2xl flex flex-col items-center justify-center space-y-3">
                   <Loader2 className="w-8 h-8 text-indigo-400 animate-spin" />
                   <span className="text-xs text-slate-400">Generating secure pairing token...</span>
                 </div>
               ) : embedQrSvg ? (
-                <div className="p-4 bg-white rounded-2xl shadow-2xl flex flex-col items-center">
+                <div className="p-3 sm:p-4 bg-white rounded-2xl shadow-2xl flex flex-col items-center max-w-full">
                   <div
                     dangerouslySetInnerHTML={{ __html: embedQrSvg }}
-                    className="w-56 h-56 flex items-center justify-center"
+                    className="w-48 h-48 sm:w-56 sm:h-56 [&>svg]:w-full [&>svg]:h-full flex items-center justify-center"
                   />
-                  <span className="text-[10px] text-slate-800 font-mono font-bold mt-2">
+                  <span className="text-[10px] text-slate-800 font-mono font-bold mt-2 break-all text-center max-w-[210px]">
                     TOKEN: {embedToken}
                   </span>
                 </div>
@@ -1174,7 +1223,7 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
                   type="text"
                   readOnly
                   value={embedPairingUrl}
-                  className="bg-slate-950 border border-slate-800 text-slate-300 text-xs px-3 py-2 rounded-xl flex-1 font-mono truncate focus:outline-hidden"
+                  className="bg-slate-950 border border-slate-800 text-slate-300 text-xs px-3 py-2 rounded-xl flex-1 min-w-0 font-mono truncate focus:outline-hidden"
                 />
                 <button
                   onClick={() => {
@@ -1191,7 +1240,7 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
             </div>
 
             {/* Regenerate Button */}
-            <div className="pt-2 flex space-x-2">
+            <div className="pt-2 flex flex-col sm:flex-row gap-2">
               <button
                 onClick={generateEmbedToken}
                 disabled={embedLoading}
@@ -1301,81 +1350,134 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
         {/* ============================================================ */}
         {activeTab === 'history' && (
           <div className="bg-slate-900/90 border border-slate-800 rounded-2xl overflow-hidden shadow-xl animate-fade-in">
-            <div className="px-6 py-4 border-b border-slate-800 flex justify-between items-center">
-              <div>
+            <div className="px-4 py-3.5 sm:px-6 sm:py-4 border-b border-slate-800 flex justify-between items-center gap-2">
+              <div className="min-w-0">
                 <h3 className="text-sm font-semibold text-white">Remote Support Session History</h3>
-                <p className="text-xs text-slate-400">Complete audit trail of all previous WebRTC support sessions</p>
+                <p className="text-xs text-slate-400 hidden sm:block">Complete audit trail of all previous WebRTC support sessions</p>
               </div>
-              <span className="text-xs text-slate-400 font-mono">{sessionHistory.length} Recorded</span>
+              <span className="text-xs text-slate-400 font-mono shrink-0">{sessionHistory.length} Recorded</span>
             </div>
 
             {sessionHistory.length === 0 ? (
-              <div className="p-12 text-center text-slate-400 text-xs">
-                No past sessions recorded yet. Start a session from the Devices tab to inspect an Android phone.
+              <div className="p-10 sm:p-12 text-center text-slate-400 text-xs">
+                No past sessions recorded yet. Start a session from the Devices tab to inspect a phone.
               </div>
             ) : (
-              <div className="divide-y divide-slate-800 overflow-x-auto">
-                <table className="w-full text-left text-xs text-slate-300">
-                  <thead className="bg-slate-950/60 text-slate-400 uppercase text-[10px] tracking-wider">
-                    <tr>
-                      <th className="px-5 py-3">Session ID</th>
-                      <th className="px-5 py-3">Device ID</th>
-                      <th className="px-5 py-3">Streams Requested</th>
-                      <th className="px-5 py-3">Started</th>
-                      <th className="px-5 py-3">Status</th>
-                      <th className="px-5 py-3">Termination Reason</th>
-                    </tr>
-                  </thead>
-                  <tbody className="divide-y divide-slate-800/60">
-                    {sessionHistory.map((s) => (
-                      <tr key={s.sessionId} className="hover:bg-slate-800/30 transition">
-                        <td className="px-5 py-3.5 font-mono text-indigo-400 text-[11px]">
-                          {s.sessionId.substring(0, 14)}...
-                        </td>
-                        <td className="px-5 py-3.5 font-mono text-slate-400 text-[11px]">{s.deviceId}</td>
-                        <td className="px-5 py-3.5">
-                          <div className="flex space-x-1.5">
-                            {s.requestCamera && (
-                              <span className="px-1.5 py-0.5 bg-indigo-500/10 text-indigo-400 rounded-md text-[10px]">
-                                Video
-                              </span>
-                            )}
-                            {s.requestMicrophone && (
-                              <span className="px-1.5 py-0.5 bg-indigo-500/10 text-indigo-400 rounded-md text-[10px]">
-                                Audio
-                              </span>
-                            )}
-                            {s.requestScreen && (
-                              <span className="px-1.5 py-0.5 bg-indigo-500/10 text-indigo-400 rounded-md text-[10px]">
-                                Screen
-                              </span>
-                            )}
-                          </div>
-                        </td>
-                        <td className="px-5 py-3.5 text-slate-400 text-[11px]">
-                          {new Date(s.startedAt).toLocaleString()}
-                        </td>
-                        <td className="px-5 py-3.5">
-                          <span
-                            className={`px-2 py-0.5 rounded-full text-[10px] font-semibold ${
-                              s.status === 'active'
-                                ? 'bg-emerald-500/10 text-emerald-400'
-                                : s.status === 'connecting'
-                                ? 'bg-amber-500/10 text-amber-400'
-                                : 'bg-slate-800 text-slate-400'
-                            }`}
-                          >
-                            {s.status.toUpperCase()}
-                          </span>
-                        </td>
-                        <td className="px-5 py-3.5 text-slate-400 text-[11px]">
+              <>
+                {/* Mobile Card List */}
+                <div className="md:hidden divide-y divide-slate-800">
+                  {sessionHistory.map((s) => (
+                    <div key={s.sessionId} className="p-4 space-y-2 text-xs">
+                      <div className="flex items-center justify-between gap-2">
+                        <span className="font-mono text-indigo-400 text-[11px] truncate">
+                          {s.sessionId.substring(0, 16)}...
+                        </span>
+                        <span
+                          className={`px-2 py-0.5 rounded-full text-[10px] font-semibold shrink-0 ${
+                            s.status === 'active'
+                              ? 'bg-emerald-500/10 text-emerald-400'
+                              : s.status === 'connecting'
+                              ? 'bg-amber-500/10 text-amber-400'
+                              : 'bg-slate-800 text-slate-400'
+                          }`}
+                        >
+                          {s.status.toUpperCase()}
+                        </span>
+                      </div>
+                      <div className="flex items-center justify-between text-[11px] text-slate-400">
+                        <span className="font-mono truncate mr-2">{s.deviceId}</span>
+                        <span className="shrink-0">{new Date(s.startedAt).toLocaleString()}</span>
+                      </div>
+                      <div className="flex flex-wrap items-center justify-between gap-2 pt-1">
+                        <div className="flex space-x-1.5">
+                          {s.requestCamera && (
+                            <span className="px-1.5 py-0.5 bg-indigo-500/10 text-indigo-400 rounded-md text-[10px]">
+                              Video
+                            </span>
+                          )}
+                          {s.requestMicrophone && (
+                            <span className="px-1.5 py-0.5 bg-indigo-500/10 text-indigo-400 rounded-md text-[10px]">
+                              Audio
+                            </span>
+                          )}
+                          {s.requestScreen && (
+                            <span className="px-1.5 py-0.5 bg-indigo-500/10 text-indigo-400 rounded-md text-[10px]">
+                              Screen
+                            </span>
+                          )}
+                        </div>
+                        <span className="text-[11px] text-slate-400 truncate max-w-[190px]">
                           {s.terminationReason || s.endedBy || 'Normal completion'}
-                        </td>
+                        </span>
+                      </div>
+                    </div>
+                  ))}
+                </div>
+
+                {/* Desktop Table */}
+                <div className="hidden md:block divide-y divide-slate-800 overflow-x-auto">
+                  <table className="w-full text-left text-xs text-slate-300">
+                    <thead className="bg-slate-950/60 text-slate-400 uppercase text-[10px] tracking-wider">
+                      <tr>
+                        <th className="px-5 py-3">Session ID</th>
+                        <th className="px-5 py-3">Device ID</th>
+                        <th className="px-5 py-3">Streams Requested</th>
+                        <th className="px-5 py-3">Started</th>
+                        <th className="px-5 py-3">Status</th>
+                        <th className="px-5 py-3">Termination Reason</th>
                       </tr>
-                    ))}
-                  </tbody>
-                </table>
-              </div>
+                    </thead>
+                    <tbody className="divide-y divide-slate-800/60">
+                      {sessionHistory.map((s) => (
+                        <tr key={s.sessionId} className="hover:bg-slate-800/30 transition">
+                          <td className="px-5 py-3.5 font-mono text-indigo-400 text-[11px]">
+                            {s.sessionId.substring(0, 14)}...
+                          </td>
+                          <td className="px-5 py-3.5 font-mono text-slate-400 text-[11px]">{s.deviceId}</td>
+                          <td className="px-5 py-3.5">
+                            <div className="flex space-x-1.5">
+                              {s.requestCamera && (
+                                <span className="px-1.5 py-0.5 bg-indigo-500/10 text-indigo-400 rounded-md text-[10px]">
+                                  Video
+                                </span>
+                              )}
+                              {s.requestMicrophone && (
+                                <span className="px-1.5 py-0.5 bg-indigo-500/10 text-indigo-400 rounded-md text-[10px]">
+                                  Audio
+                                </span>
+                              )}
+                              {s.requestScreen && (
+                                <span className="px-1.5 py-0.5 bg-indigo-500/10 text-indigo-400 rounded-md text-[10px]">
+                                  Screen
+                                </span>
+                              )}
+                            </div>
+                          </td>
+                          <td className="px-5 py-3.5 text-slate-400 text-[11px]">
+                            {new Date(s.startedAt).toLocaleString()}
+                          </td>
+                          <td className="px-5 py-3.5">
+                            <span
+                              className={`px-2 py-0.5 rounded-full text-[10px] font-semibold ${
+                                s.status === 'active'
+                                  ? 'bg-emerald-500/10 text-emerald-400'
+                                  : s.status === 'connecting'
+                                  ? 'bg-amber-500/10 text-amber-400'
+                                  : 'bg-slate-800 text-slate-400'
+                              }`}
+                            >
+                              {s.status.toUpperCase()}
+                            </span>
+                          </td>
+                          <td className="px-5 py-3.5 text-slate-400 text-[11px]">
+                            {s.terminationReason || s.endedBy || 'Normal completion'}
+                          </td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
+              </>
             )}
           </div>
         )}
@@ -1385,51 +1487,76 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
         {/* ============================================================ */}
         {activeTab === 'audit' && (
           <div className="bg-slate-900/90 border border-slate-800 rounded-2xl overflow-hidden shadow-xl animate-fade-in">
-            <div className="px-6 py-4 border-b border-slate-800 flex justify-between items-center">
-              <div>
+            <div className="px-4 py-3.5 sm:px-6 sm:py-4 border-b border-slate-800 flex justify-between items-center gap-2">
+              <div className="min-w-0">
                 <h3 className="text-sm font-semibold text-white">Cryptographic Security Audit Log</h3>
-                <p className="text-xs text-slate-400">Immutable ledger of pairing, session, and administrative events</p>
+                <p className="text-xs text-slate-400 hidden sm:block">Immutable ledger of pairing, session, and administrative events</p>
               </div>
-              <span className="text-xs text-slate-400 font-mono">{auditLogs.length} Events</span>
+              <span className="text-xs text-slate-400 font-mono shrink-0">{auditLogs.length} Events</span>
             </div>
 
             {auditLogs.length === 0 ? (
-              <div className="p-12 text-center text-slate-400 text-xs">
+              <div className="p-10 sm:p-12 text-center text-slate-400 text-xs">
                 No audit events recorded yet.
               </div>
             ) : (
-              <div className="divide-y divide-slate-800 overflow-x-auto">
-                <table className="w-full text-left text-xs text-slate-300">
-                  <thead className="bg-slate-950/60 text-slate-400 uppercase text-[10px] tracking-wider">
-                    <tr>
-                      <th className="px-5 py-3">Timestamp</th>
-                      <th className="px-5 py-3">Event Type</th>
-                      <th className="px-5 py-3">Device / Target</th>
-                      <th className="px-5 py-3">Details</th>
-                    </tr>
-                  </thead>
-                  <tbody className="divide-y divide-slate-800/60">
-                    {auditLogs.map((log, idx) => (
-                      <tr key={log.id || idx} className="hover:bg-slate-800/30 transition">
-                        <td className="px-5 py-3.5 text-slate-400 font-mono text-[11px]">
-                          {new Date(log.timestamp).toLocaleString()}
-                        </td>
-                        <td className="px-5 py-3.5">
-                          <span className="px-2 py-0.5 bg-indigo-500/10 border border-indigo-500/20 text-indigo-300 rounded-md font-mono text-[10px] font-semibold">
-                            {log.eventType}
-                          </span>
-                        </td>
-                        <td className="px-5 py-3.5 font-mono text-slate-400 text-[11px]">
-                          {log.deviceId || log.adminId || 'System'}
-                        </td>
-                        <td className="px-5 py-3.5 text-slate-300 text-[11px] max-w-md truncate">
-                          {log.details || '—'}
-                        </td>
+              <>
+                {/* Mobile Audit Cards */}
+                <div className="md:hidden divide-y divide-slate-800">
+                  {auditLogs.map((log, idx) => (
+                    <div key={log.id || idx} className="p-4 space-y-1.5 text-xs">
+                      <div className="flex items-center justify-between gap-2">
+                        <span className="px-2 py-0.5 bg-indigo-500/10 border border-indigo-500/20 text-indigo-300 rounded-md font-mono text-[10px] font-semibold">
+                          {log.eventType}
+                        </span>
+                        <span className="text-[10px] text-slate-400 font-mono shrink-0">
+                          {new Date(log.timestamp).toLocaleTimeString()}
+                        </span>
+                      </div>
+                      <p className="text-[11px] text-slate-300 leading-relaxed break-words">
+                        {log.details || '—'}
+                      </p>
+                      <p className="text-[10px] font-mono text-slate-500 truncate">
+                        Target: {log.deviceId || log.adminId || 'System'}
+                      </p>
+                    </div>
+                  ))}
+                </div>
+
+                {/* Desktop Table */}
+                <div className="hidden md:block divide-y divide-slate-800 overflow-x-auto">
+                  <table className="w-full text-left text-xs text-slate-300">
+                    <thead className="bg-slate-950/60 text-slate-400 uppercase text-[10px] tracking-wider">
+                      <tr>
+                        <th className="px-5 py-3">Timestamp</th>
+                        <th className="px-5 py-3">Event Type</th>
+                        <th className="px-5 py-3">Device / Target</th>
+                        <th className="px-5 py-3">Details</th>
                       </tr>
-                    ))}
-                  </tbody>
-                </table>
-              </div>
+                    </thead>
+                    <tbody className="divide-y divide-slate-800/60">
+                      {auditLogs.map((log, idx) => (
+                        <tr key={log.id || idx} className="hover:bg-slate-800/30 transition">
+                          <td className="px-5 py-3.5 text-slate-400 font-mono text-[11px]">
+                            {new Date(log.timestamp).toLocaleString()}
+                          </td>
+                          <td className="px-5 py-3.5">
+                            <span className="px-2 py-0.5 bg-indigo-500/10 border border-indigo-500/20 text-indigo-300 rounded-md font-mono text-[10px] font-semibold">
+                              {log.eventType}
+                            </span>
+                          </td>
+                          <td className="px-5 py-3.5 font-mono text-slate-400 text-[11px]">
+                            {log.deviceId || log.adminId || 'System'}
+                          </td>
+                          <td className="px-5 py-3.5 text-slate-300 text-[11px] max-w-md truncate">
+                            {log.details || '—'}
+                          </td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
+              </>
             )}
           </div>
         )}
@@ -1565,9 +1692,9 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
         {/* ============================================================ */}
         {activeTab === 'settings' && (
           <div className="space-y-6 animate-fade-in">
-            <div className="bg-slate-900/90 border border-slate-800 rounded-2xl p-6 shadow-xl space-y-6">
+            <div className="bg-slate-900/90 border border-slate-800 rounded-2xl p-4 sm:p-6 shadow-xl space-y-6">
               <div>
-                <h3 className="text-base font-semibold text-white">WebRTC Network Traversal & STUN/TURN</h3>
+                <h3 className="text-base font-semibold text-white">WebRTC Network Traversal &amp; STUN/TURN</h3>
                 <p className="text-xs text-slate-400 mt-1">
                   Active ICE servers used for establishing P2P and TURN relay connectivity across cellular and restricted Wi-Fi networks.
                 </p>
@@ -1577,13 +1704,13 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
                 <span className="text-xs font-medium text-slate-400 uppercase tracking-wider">
                   Configured ICE Servers
                 </span>
-                <div className="bg-slate-950 border border-slate-800 rounded-xl p-4 font-mono text-xs text-slate-300 space-y-2">
+                <div className="bg-slate-950 border border-slate-800 rounded-xl p-3 sm:p-4 font-mono text-xs text-slate-300 space-y-2">
                   {iceServers.map((server, idx) => (
-                    <div key={idx} className="p-2.5 bg-slate-900/80 rounded-lg flex items-center justify-between">
-                      <span className="text-indigo-400 truncate max-w-md">
+                    <div key={idx} className="p-2.5 bg-slate-900/80 rounded-lg flex flex-wrap sm:flex-nowrap items-center justify-between gap-2">
+                      <span className="text-indigo-400 min-w-0 flex-1 break-all sm:truncate">
                         {Array.isArray(server.urls) ? server.urls.join(', ') : server.urls}
                       </span>
-                      <span className="text-[10px] text-emerald-400 px-2 py-0.5 bg-emerald-500/10 rounded-md font-semibold">
+                      <span className="text-[10px] text-emerald-400 px-2 py-0.5 bg-emerald-500/10 rounded-md font-semibold shrink-0">
                         {server.urls.toString().includes('turn') ? 'TURN Relay' : 'STUN'}
                       </span>
                     </div>
@@ -1627,27 +1754,27 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
 
       {/* Device Details Modal */}
       {deviceDetails && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/80 backdrop-blur-sm animate-fade-in">
-          <div className="bg-slate-900 border border-slate-700 rounded-2xl w-full max-w-md shadow-2xl overflow-hidden flex flex-col">
-            <div className="flex items-center justify-between px-6 py-4 border-b border-slate-800 bg-slate-950/60">
-              <div className="flex items-center space-x-3">
-                <div className="p-2 bg-indigo-500/10 text-indigo-400 rounded-xl">
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-3 sm:p-4 bg-black/80 backdrop-blur-sm animate-fade-in">
+          <div className="bg-slate-900 border border-slate-700 rounded-2xl w-full max-w-md max-h-[92dvh] shadow-2xl overflow-hidden flex flex-col">
+            <div className="flex items-center justify-between gap-2 px-4 py-3.5 sm:px-6 sm:py-4 border-b border-slate-800 bg-slate-950/60 shrink-0">
+              <div className="flex items-center space-x-3 min-w-0">
+                <div className="p-2 bg-indigo-500/10 text-indigo-400 rounded-xl shrink-0">
                   <Smartphone className="w-5 h-5" />
                 </div>
-                <div>
-                  <h3 className="text-sm font-bold text-white">{deviceDetails.deviceName}</h3>
-                  <p className="text-[11px] text-slate-400 font-mono">{deviceDetails.deviceId}</p>
+                <div className="min-w-0">
+                  <h3 className="text-sm font-bold text-white truncate">{deviceDetails.deviceName}</h3>
+                  <p className="text-[11px] text-slate-400 font-mono truncate">{deviceDetails.deviceId}</p>
                 </div>
               </div>
               <button
                 onClick={() => setDeviceDetails(null)}
-                className="p-1.5 text-slate-400 hover:text-white rounded-lg transition"
+                className="p-1.5 text-slate-400 hover:text-white rounded-lg transition shrink-0 cursor-pointer"
               >
                 <X className="w-5 h-5" />
               </button>
             </div>
 
-            <div className="p-6 space-y-3 text-xs">
+            <div className="p-4 sm:p-6 space-y-3 text-xs overflow-y-auto">
               <div className="flex justify-between py-1.5 border-b border-slate-800">
                 <span className="text-slate-400">Platform</span>
                 <span className="text-slate-200 font-medium">{deviceDetails.platform.toUpperCase()}</span>
@@ -1705,7 +1832,7 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
               )}
             </div>
 
-            <div className="p-4 border-t border-slate-800 bg-slate-950/40 flex items-center space-x-2">
+            <div className="p-4 border-t border-slate-800 bg-slate-950/40 flex items-center space-x-2 shrink-0">
               <button
                 onClick={() => {
                   const devId = deviceDetails.deviceId;
@@ -1713,14 +1840,14 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
                   setSelectedDeviceIdForMap(devId);
                   setActiveTab('map');
                 }}
-                className="flex-1 py-2 bg-emerald-600 hover:bg-emerald-500 text-white text-xs font-semibold rounded-xl flex items-center justify-center space-x-1.5 transition"
+                className="flex-1 py-2 bg-emerald-600 hover:bg-emerald-500 text-white text-xs font-semibold rounded-xl flex items-center justify-center space-x-1.5 transition cursor-pointer"
               >
                 <MapPin className="w-3.5 h-3.5" />
                 <span>View on Map</span>
               </button>
               <button
                 onClick={() => setDeviceDetails(null)}
-                className="px-4 py-2 bg-slate-800 hover:bg-slate-700 text-slate-200 text-xs font-medium rounded-xl transition"
+                className="px-4 py-2 bg-slate-800 hover:bg-slate-700 text-slate-200 text-xs font-medium rounded-xl transition cursor-pointer"
               >
                 Close
               </button>
@@ -1731,14 +1858,14 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
 
       {/* Rename Device Modal */}
       {deviceToRename && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/80 backdrop-blur-sm animate-fade-in">
-          <div className="bg-slate-900 border border-slate-700 rounded-2xl w-full max-w-sm shadow-2xl p-6 space-y-4">
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-3 sm:p-4 bg-black/80 backdrop-blur-sm animate-fade-in">
+          <div className="bg-slate-900 border border-slate-700 rounded-2xl w-full max-w-sm shadow-2xl p-5 sm:p-6 space-y-4">
             <div className="flex items-center justify-between">
               <h3 className="text-sm font-bold text-white flex items-center space-x-2">
                 <Edit2 className="w-4 h-4 text-indigo-400" />
                 <span>Rename Paired Device</span>
               </h3>
-              <button onClick={() => setDeviceToRename(null)} className="text-slate-400 hover:text-white">
+              <button onClick={() => setDeviceToRename(null)} className="text-slate-400 hover:text-white cursor-pointer">
                 <X className="w-4 h-4" />
               </button>
             </div>
@@ -1758,13 +1885,13 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
               <button
                 onClick={handleRenameConfirm}
                 disabled={renameLoading || !newDeviceName.trim()}
-                className="flex-1 py-2 bg-indigo-600 hover:bg-indigo-500 disabled:opacity-50 text-white text-xs font-semibold rounded-xl flex items-center justify-center space-x-1.5 transition"
+                className="flex-1 py-2 bg-indigo-600 hover:bg-indigo-500 disabled:opacity-50 text-white text-xs font-semibold rounded-xl flex items-center justify-center space-x-1.5 transition cursor-pointer"
               >
                 {renameLoading ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <span>Save Name</span>}
               </button>
               <button
                 onClick={() => setDeviceToRename(null)}
-                className="py-2 px-4 bg-slate-800 hover:bg-slate-700 text-slate-300 text-xs rounded-xl transition"
+                className="py-2 px-4 bg-slate-800 hover:bg-slate-700 text-slate-300 text-xs rounded-xl transition cursor-pointer"
               >
                 Cancel
               </button>
@@ -1775,33 +1902,33 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
 
       {/* Revoke / Delete Confirmation Modal */}
       {deviceToManage && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/80 backdrop-blur-sm animate-fade-in">
-          <div className="bg-slate-900 border border-slate-700 rounded-2xl w-full max-w-md shadow-2xl overflow-hidden flex flex-col">
-            <div className="flex items-center justify-between px-6 py-4 border-b border-slate-800 bg-slate-950/60">
-              <div className="flex items-center space-x-3">
-                <div className="p-2 bg-rose-500/10 border border-rose-500/20 text-rose-400 rounded-xl">
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-3 sm:p-4 bg-black/80 backdrop-blur-sm animate-fade-in">
+          <div className="bg-slate-900 border border-slate-700 rounded-2xl w-full max-w-md max-h-[92dvh] shadow-2xl overflow-hidden flex flex-col">
+            <div className="flex items-center justify-between gap-2 px-4 py-3.5 sm:px-6 sm:py-4 border-b border-slate-800 bg-slate-950/60 shrink-0">
+              <div className="flex items-center space-x-3 min-w-0">
+                <div className="p-2 bg-rose-500/10 border border-rose-500/20 text-rose-400 rounded-xl shrink-0">
                   <Trash2 className="w-5 h-5" />
                 </div>
-                <div>
-                  <h3 className="text-sm font-bold text-white">Manage Device Access</h3>
-                  <p className="text-xs text-slate-400">Revoke pairing or remove device</p>
+                <div className="min-w-0">
+                  <h3 className="text-sm font-bold text-white truncate">Manage Device Access</h3>
+                  <p className="text-xs text-slate-400 truncate">Revoke pairing or remove device</p>
                 </div>
               </div>
               <button
                 onClick={() => setDeviceToManage(null)}
                 disabled={manageLoading}
-                className="p-1.5 text-slate-400 hover:text-white rounded-lg transition"
+                className="p-1.5 text-slate-400 hover:text-white rounded-lg transition shrink-0 cursor-pointer"
               >
                 <X className="w-5 h-5" />
               </button>
             </div>
 
-            <div className="p-6 space-y-4">
+            <div className="p-4 sm:p-6 space-y-4 overflow-y-auto">
               <div className="p-3.5 bg-slate-950/70 border border-slate-800 rounded-xl space-y-1.5">
-                <div className="flex items-center justify-between">
-                  <span className="text-xs font-bold text-white">{deviceToManage.deviceName}</span>
+                <div className="flex items-center justify-between gap-2">
+                  <span className="text-xs font-bold text-white truncate">{deviceToManage.deviceName}</span>
                   <span
-                    className={`text-[10px] font-semibold px-2 py-0.5 rounded-full ${
+                    className={`text-[10px] font-semibold px-2 py-0.5 rounded-full shrink-0 ${
                       deviceToManage.isRevoked
                         ? 'bg-rose-500/15 text-rose-400 border border-rose-500/20'
                         : deviceToManage.status === 'online'
@@ -1812,7 +1939,7 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
                     {deviceToManage.isRevoked ? 'REVOKED' : deviceToManage.status.toUpperCase()}
                   </span>
                 </div>
-                <p className="text-[11px] font-mono text-slate-400">ID: {deviceToManage.deviceId}</p>
+                <p className="text-[11px] font-mono text-slate-400 truncate">ID: {deviceToManage.deviceId}</p>
                 <p className="text-[11px] text-slate-500">Platform: {deviceToManage.platform.toUpperCase()}</p>
               </div>
 
@@ -1832,7 +1959,7 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
                     ) : (
                       <>
                         <Shield className="w-4 h-4" />
-                        <span>Revoke Device Access (Block Future Sessions)</span>
+                        <span>Revoke Device Access</span>
                       </>
                     )}
                   </button>
@@ -1848,7 +1975,7 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
                   ) : (
                     <>
                       <Trash2 className="w-4 h-4" />
-                      <span>Delete Device Permanently from Dashboard</span>
+                      <span>Delete Device Permanently</span>
                     </>
                   )}
                 </button>

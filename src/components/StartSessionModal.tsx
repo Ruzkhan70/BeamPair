@@ -83,38 +83,38 @@ export const StartSessionModal: React.FC<StartSessionModalProps> = ({
   };
 
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/80 backdrop-blur-sm animate-fade-in">
-      <div className="bg-slate-900 border border-slate-800 rounded-2xl w-full max-w-md shadow-2xl overflow-hidden flex flex-col">
+    <div className="fixed inset-0 z-50 flex items-center justify-center p-3 sm:p-4 bg-black/80 backdrop-blur-sm animate-fade-in">
+      <div className="bg-slate-900 border border-slate-800 rounded-2xl w-full max-w-md max-h-[92dvh] shadow-2xl overflow-hidden flex flex-col">
         {/* Header */}
-        <div className="flex items-center justify-between px-6 py-4 border-b border-slate-800 bg-slate-950/40">
-          <div className="flex items-center space-x-3">
-            <div className="p-2 bg-indigo-500/10 border border-indigo-500/20 rounded-xl text-indigo-400">
+        <div className="flex items-center justify-between px-4 py-3.5 sm:px-6 sm:py-4 border-b border-slate-800 bg-slate-950/40 shrink-0">
+          <div className="flex items-center space-x-3 min-w-0">
+            <div className="p-2 bg-indigo-500/10 border border-indigo-500/20 rounded-xl text-indigo-400 shrink-0">
               <Sliders className="w-5 h-5" />
             </div>
-            <div>
-              <h3 className="text-base font-semibold text-white">Start Support Session</h3>
-              <p className="text-xs text-slate-400">{device.deviceName}</p>
+            <div className="min-w-0">
+              <h3 className="text-sm sm:text-base font-semibold text-white truncate">Start Support Session</h3>
+              <p className="text-xs text-slate-400 truncate">{device.deviceName}</p>
             </div>
           </div>
           <button
             onClick={onClose}
-            className="p-1.5 text-slate-400 hover:text-white hover:bg-slate-800 rounded-lg transition"
+            className="p-1.5 text-slate-400 hover:text-white hover:bg-slate-800 rounded-lg transition shrink-0 cursor-pointer"
           >
             <X className="w-5 h-5" />
           </button>
         </div>
 
         {/* Content */}
-        <div className="p-6 space-y-4">
+        <div className="p-4 sm:p-6 space-y-4 overflow-y-auto">
           <p className="text-xs text-slate-300">
-            Select which media streams to request from this Android phone. The user will receive an authenticated confirmation prompt before capture begins.
+            Select which media streams to request from this phone. The user will receive an authenticated confirmation prompt before capture begins.
           </p>
 
           {/* Camera Option */}
           <div className="p-3.5 bg-slate-950/60 border border-slate-800 rounded-xl space-y-3">
             <div className="flex items-center justify-between">
               <div className="flex items-center space-x-2.5">
-                <Camera className="w-4 h-4 text-indigo-400" />
+                <Camera className="w-4 h-4 text-indigo-400 shrink-0" />
                 <div>
                   <span className="text-xs font-semibold text-white block">Camera Stream</span>
                   <span className="text-[11px] text-slate-400">Live video from device camera</span>
@@ -129,13 +129,13 @@ export const StartSessionModal: React.FC<StartSessionModalProps> = ({
             </div>
 
             {requestCamera && (
-              <div className="pt-2 border-t border-slate-800 flex items-center justify-between">
+              <div className="pt-2 border-t border-slate-800 flex flex-wrap items-center justify-between gap-2">
                 <span className="text-[11px] text-slate-400">Initial Camera Lens</span>
                 <div className="flex space-x-1.5">
                   <button
                     type="button"
                     onClick={() => setCameraFacing('environment')}
-                    className={`px-2.5 py-1 text-[11px] font-medium rounded-lg transition ${
+                    className={`px-2.5 py-1 text-[11px] font-medium rounded-lg transition cursor-pointer ${
                       cameraFacing === 'environment'
                         ? 'bg-indigo-600 text-white'
                         : 'bg-slate-800 text-slate-400 hover:text-white'
@@ -146,7 +146,7 @@ export const StartSessionModal: React.FC<StartSessionModalProps> = ({
                   <button
                     type="button"
                     onClick={() => setCameraFacing('user')}
-                    className={`px-2.5 py-1 text-[11px] font-medium rounded-lg transition ${
+                    className={`px-2.5 py-1 text-[11px] font-medium rounded-lg transition cursor-pointer ${
                       cameraFacing === 'user'
                         ? 'bg-indigo-600 text-white'
                         : 'bg-slate-800 text-slate-400 hover:text-white'

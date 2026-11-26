@@ -10,18 +10,11 @@ export interface IceServerConfig {
 }
 
 export const DEFAULT_STUN_TURN_SERVERS: RTCIceServer[] = [
-  // Google Public STUN
+  // Fast public STUN (kept concise so ICE gathering completes quickly)
   { urls: 'stun:stun.l.google.com:19302' },
   { urls: 'stun:stun1.l.google.com:19302' },
-  { urls: 'stun:stun2.l.google.com:19302' },
-  { urls: 'stun:stun3.l.google.com:19302' },
-  { urls: 'stun:stun4.l.google.com:19302' },
-  // Cloudflare & Mozilla & Twilio STUN
   { urls: 'stun:stun.cloudflare.com:3478' },
-  { urls: 'stun:stun.services.mozilla.com' },
-  { urls: 'stun:global.stun.twilio.com:3478' },
-  // Public Open Relay STUN & TURN
-  { urls: 'stun:openrelay.metered.ca:80' },
+  // Public Open Relay TURN for strict NAT / mobile carrier traversal
   {
     urls: 'turn:openrelay.metered.ca:80',
     username: 'openrelayproject',
@@ -43,12 +36,13 @@ export async function fetchIceServers(): Promise<RTCIceServer[]> {
   if (typeof window !== 'undefined' && window.location.hostname.endsWith('github.io')) {
     return DEFAULT_STUN_TURN_SERVERS;
   }
+  const controller = new AbortController();
+  const timeoutId = setTimeout(() => controller.abort(), 1500);
   try {
-    const res = await fetch('/api/webrtc/ice-servers');
+    const res = await fetch('/api/webrtc/ice-servers', { signal: controller.signal });
     if (res.ok) {
       const data = await res.json();
       if (Array.isArray(data.iceServers) && data.iceServers.length > 0) {
-        // Combine and deduplicate by serialized URLs so ICE checks don't stall on duplicates
         const merged = [...data.iceServers, ...DEFAULT_STUN_TURN_SERVERS];
         const seen = new Set<string>();
         return merged.filter((srv) => {
@@ -60,7 +54,9 @@ export async function fetchIceServers(): Promise<RTCIceServer[]> {
       }
     }
   } catch (err) {
-    console.warn('[WebRTC] Server ICE config route not reachable, using resilient STUN+TURN defaults:', err);
+    console.warn('[WebRTC] Server ICE config route fallback:', err);
+  } finally {
+    clearTimeout(timeoutId);
   }
   return DEFAULT_STUN_TURN_SERVERS;
 }
@@ -91,13 +87,38 @@ export class WebRTCManager {
   private webLockAbortController: AbortController | null = null;
   private isClosing = false;
 
+  private lastStatsBytes = 0;
+  private lastStatsTime = 0;
+
+  private preferHardwareVideoCodecs(transceiver: RTCRtpTransceiver): void {
+    try {
+      if (typeof (transceiver as any).setCodecPreferences !== 'function') return;
+      const caps = RTCRtpReceiver.getCapabilities?.('video') || RTCRtpSender.getCapabilities?.('video');
+      if (!caps?.codecs?.length) return;
+
+      // Prioritize hardware-accelerated H264 and fast VP8 over software-heavy VP9/AV1 on mobile phones
+      const h264 = caps.codecs.filter((c) => c.mimeType.toLowerCase() === 'video/h264');
+      const vp8 = caps.codecs.filter((c) => c.mimeType.toLowerCase() === 'video/vp8');
+      const rest = caps.codecs.filter((c) => {
+        const mime = c.mimeType.toLowerCase();
+        return mime !== 'video/h264' && mime !== 'video/vp8';
+      });
+      const ordered = [...h264, ...vp8, ...rest];
+      if (ordered.length > 0) {
+        (transceiver as any).setCodecPreferences(ordered);
+      }
+    } catch {
+      // Safely ignore on browsers that do not expose setCodecPreferences
+    }
+  }
+
   async init(role: 'admin' | 'device'): Promise<void> {
     this.role = role;
     this.iceServers = await fetchIceServers();
 
     const configuration: RTCConfiguration = {
       iceServers: this.iceServers,
-      iceCandidatePoolSize: 4,
+      iceCandidatePoolSize: 2,
       bundlePolicy: 'max-bundle',
       rtcpMuxPolicy: 'require',
     };
@@ -122,8 +143,19 @@ export class WebRTCManager {
       }
     };
 
-    // Track handling: add event.track directly into remoteStream and trigger listener
+    // Track handling: configure ultra-low-latency receiver playout and deliver stream to Admin UI
     this.peerConnection.ontrack = (event) => {
+      if (event.receiver) {
+        try {
+          if ('playoutDelayHint' in event.receiver) {
+            (event.receiver as any).playoutDelayHint = 0;
+          }
+          if ('jitterBufferTarget' in event.receiver) {
+            (event.receiver as any).jitterBufferTarget = 0;
+          }
+        } catch {}
+      }
+
       if (event.track) {
         if (!this.remoteStream.getTracks().some((t) => t.id === event.track.id)) {
           this.remoteStream.addTrack(event.track);
@@ -136,7 +168,7 @@ export class WebRTCManager {
           }
         });
       }
-      const streamToPass = (event.streams && event.streams[0]) ? event.streams[0] : this.remoteStream;
+      const streamToPass = event.streams && event.streams[0] ? event.streams[0] : this.remoteStream;
       if (this.onRemoteStreamTrack) {
         this.onRemoteStreamTrack(streamToPass, event.track);
       }
@@ -155,7 +187,8 @@ export class WebRTCManager {
 
       // Add transceivers for receiving video and audio from secondary device
       try {
-        this.peerConnection.addTransceiver('video', { direction: 'recvonly' });
+        const videoTransceiver = this.peerConnection.addTransceiver('video', { direction: 'recvonly' });
+        this.preferHardwareVideoCodecs(videoTransceiver);
         this.peerConnection.addTransceiver('audio', { direction: 'recvonly' });
       } catch (err) {
         console.warn('Transceiver add warning:', err);
@@ -381,14 +414,14 @@ export class WebRTCManager {
 
     let stream: MediaStream | null = null;
 
-    // Strategy 1: Force exact facingMode with smooth 540p/720p @ 30fps so upload & TURN never lag
+    // Strategy 1: Force exact facingMode with smooth mobile hardware resolution (640x480 / 854x480 @ 30fps)
     const constraintsExact: MediaStreamConstraints = {
       video: specificDeviceId
-        ? { deviceId: { exact: specificDeviceId }, width: { ideal: 960, max: 1280 }, height: { ideal: 540, max: 720 }, frameRate: { ideal: 30, max: 30 } }
+        ? { deviceId: { exact: specificDeviceId }, width: { ideal: 854, max: 960 }, height: { ideal: 480, max: 720 }, frameRate: { ideal: 30, max: 30 } }
         : {
             facingMode: { exact: facingMode },
-            width: { ideal: 960, max: 1280 },
-            height: { ideal: 540, max: 720 },
+            width: { ideal: 854, max: 960 },
+            height: { ideal: 480, max: 720 },
             frameRate: { ideal: 30, max: 30 },
           },
       audio: false,
@@ -415,8 +448,8 @@ export class WebRTCManager {
               stream = await navigator.mediaDevices.getUserMedia({
                 video: {
                   deviceId: { exact: matchedCam.deviceId },
-                  width: { ideal: 960, max: 1280 },
-                  height: { ideal: 540, max: 720 },
+                  width: { ideal: 854, max: 960 },
+                  height: { ideal: 480, max: 720 },
                   frameRate: { ideal: 30, max: 30 },
                 },
                 audio: false,
@@ -436,7 +469,7 @@ export class WebRTCManager {
               ? { deviceId: { exact: specificDeviceId } }
               : {
                   facingMode: { ideal: facingMode },
-                  width: { ideal: 854, max: 1280 },
+                  width: { ideal: 640, max: 960 },
                   height: { ideal: 480, max: 720 },
                   frameRate: { ideal: 30, max: 30 },
                 },
@@ -590,8 +623,11 @@ export class WebRTCManager {
         params.encodings = [{}];
       }
       params.degradationPreference = 'maintain-framerate';
-      params.encodings[0].maxBitrate = 950_000;
+      params.encodings[0].maxBitrate = 650_000;
       params.encodings[0].maxFramerate = 30;
+      if ('networkPriority' in params.encodings[0]) {
+        (params.encodings[0] as any).networkPriority = 'high';
+      }
       await sender.setParameters(params);
     } catch {
       // Some mobile WebViews restrict sender.setParameters; ignore safely
@@ -610,18 +646,22 @@ export class WebRTCManager {
       const kind = t.receiver?.track?.kind || t.sender?.track?.kind;
       if (kind === 'video') {
         if (videoTrack) {
+          this.preferHardwareVideoCodecs(t);
           t.direction = 'sendonly';
           try {
             if (typeof (t.sender as any).setStreams === 'function') {
               (t.sender as any).setStreams(this.localStream);
             }
           } catch {}
-          ops.push(
-            t.sender
-              .replaceTrack(videoTrack)
-              .then(() => this.tuneVideoSenderParameters(t.sender))
-              .catch((err) => console.warn('Video bind replaceTrack warning:', err))
-          );
+          // Skip duplicate replaceTrack if this exact track is already bound
+          if (t.sender?.track?.id !== videoTrack.id) {
+            ops.push(
+              t.sender
+                .replaceTrack(videoTrack)
+                .then(() => this.tuneVideoSenderParameters(t.sender))
+                .catch((err) => console.warn('Video bind replaceTrack warning:', err))
+            );
+          }
         } else {
           t.direction = 'inactive';
         }
@@ -633,11 +673,13 @@ export class WebRTCManager {
               (t.sender as any).setStreams(this.localStream);
             }
           } catch {}
-          ops.push(
-            t.sender
-              .replaceTrack(audioTrack)
-              .catch((err) => console.warn('Audio bind replaceTrack warning:', err))
-          );
+          if (t.sender?.track?.id !== audioTrack.id) {
+            ops.push(
+              t.sender
+                .replaceTrack(audioTrack)
+                .catch((err) => console.warn('Audio bind replaceTrack warning:', err))
+            );
+          }
         } else {
           t.direction = 'inactive';
         }
@@ -786,6 +828,82 @@ export class WebRTCManager {
     } catch (err) {
       console.warn('restartIce error:', err);
       return null;
+    }
+  }
+
+  // Live WebRTC transport & playout metrics for Admin diagnostics
+  async getConnectionStats(): Promise<{
+    transport: 'direct' | 'relay' | 'unknown';
+    fps: number | null;
+    rttMs: number | null;
+    bitrateKbps: number | null;
+  }> {
+    if (!this.peerConnection) {
+      return { transport: 'unknown', fps: null, rttMs: null, bitrateKbps: null };
+    }
+    try {
+      const stats = await this.peerConnection.getStats();
+      let transport: 'direct' | 'relay' | 'unknown' = 'unknown';
+      let fps: number | null = null;
+      let rttMs: number | null = null;
+      let bitrateKbps: number | null = null;
+      let selectedPairId: string | null = null;
+      let totalBytes = 0;
+
+      stats.forEach((report) => {
+        if (report.type === 'transport' && report.selectedCandidatePairId) {
+          selectedPairId = report.selectedCandidatePairId;
+        }
+        if (report.type === 'inbound-rtp' && report.kind === 'video') {
+          if (typeof report.framesPerSecond === 'number') {
+            fps = Math.round(report.framesPerSecond);
+          }
+          if (typeof report.bytesReceived === 'number') {
+            totalBytes = report.bytesReceived;
+          }
+        }
+      });
+
+      if (totalBytes > 0) {
+        const now = Date.now();
+        if (this.lastStatsTime > 0 && now > this.lastStatsTime && totalBytes >= this.lastStatsBytes) {
+          const dtSec = (now - this.lastStatsTime) / 1000;
+          bitrateKbps = Math.round(((totalBytes - this.lastStatsBytes) * 8) / dtSec / 1000);
+        }
+        this.lastStatsBytes = totalBytes;
+        this.lastStatsTime = now;
+      }
+
+      stats.forEach((report) => {
+        const isPair =
+          report.type === 'candidate-pair' &&
+          (report.id === selectedPairId || report.nominated || report.state === 'succeeded');
+        if (isPair) {
+          if (typeof report.currentRoundTripTime === 'number') {
+            rttMs = Math.round(report.currentRoundTripTime * 1000);
+          }
+          if (report.remoteCandidateId) {
+            const remoteCand = stats.get(report.remoteCandidateId);
+            if (remoteCand?.candidateType === 'relay') {
+              transport = 'relay';
+            } else if (remoteCand?.candidateType) {
+              transport = 'direct';
+            }
+          }
+          if (transport === 'unknown' && report.localCandidateId) {
+            const localCand = stats.get(report.localCandidateId);
+            if (localCand?.candidateType === 'relay') {
+              transport = 'relay';
+            } else if (localCand?.candidateType) {
+              transport = 'direct';
+            }
+          }
+        }
+      });
+
+      return { transport, fps, rttMs, bitrateKbps };
+    } catch {
+      return { transport: 'unknown', fps: null, rttMs: null, bitrateKbps: null };
     }
   }
 

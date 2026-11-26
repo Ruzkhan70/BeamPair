@@ -74,6 +74,12 @@ export const AdminLiveStreamModal: React.FC<AdminLiveStreamModalProps> = ({
   const [isWebRtcPlaying, setIsWebRtcPlaying] = useState<boolean>(false);
   const [hasRelayFrame, setHasRelayFrame] = useState<boolean>(false);
   const [liveFallbackFrame, setLiveFallbackFrame] = useState<string | null>(null);
+  const [streamStats, setStreamStats] = useState<{
+    transport: 'direct' | 'relay' | 'unknown';
+    fps: number | null;
+    rttMs: number | null;
+    bitrateKbps: number | null;
+  }>({ transport: 'unknown', fps: null, rttMs: null, bitrateKbps: null });
   const [showMiniMap, setShowMiniMap] = useState<boolean>(false);
   const [liveDeviceLocation, setLiveDeviceLocation] = useState<DeviceLocation | undefined>(device.location);
   const isStaticHost = typeof window !== 'undefined' && window.location.hostname.endsWith('github.io');
@@ -89,6 +95,8 @@ export const AdminLiveStreamModal: React.FC<AdminLiveStreamModalProps> = ({
   const lastAppliedAnswerRef = useRef<string | null>(null);
   const iceRetryCountRef = useRef<number>(0);
   const lastIceRetryAtRef = useRef<number>(0);
+  const isWebRtcPlayingRef = useRef<boolean>(false);
+  const lastResolutionRef = useRef<string>('Detecting feed...');
 
   // Timer for session duration
   useEffect(() => {
@@ -130,6 +138,23 @@ export const AdminLiveStreamModal: React.FC<AdminLiveStreamModalProps> = ({
     if (audioRef.current) audioRef.current.srcObject = null;
   }, []);
 
+  const markWebRtcPlaying = useCallback(() => {
+    const vid = videoRef.current;
+    if (!isWebRtcPlayingRef.current) {
+      isWebRtcPlayingRef.current = true;
+      setIsWebRtcPlaying(true);
+      setLiveFallbackFrame(null);
+      setHasRelayFrame(false);
+    }
+    if (vid && vid.videoWidth > 0) {
+      const nextRes = `${vid.videoWidth} × ${vid.videoHeight}px`;
+      if (lastResolutionRef.current !== nextRes) {
+        lastResolutionRef.current = nextRes;
+        setVideoResolution(nextRes);
+      }
+    }
+  }, []);
+
   // WebRTC Peer Connection Setup for Admin (Receiver)
   useEffect(() => {
     const webrtc = new WebRTCManager();
@@ -137,6 +162,7 @@ export const AdminLiveStreamModal: React.FC<AdminLiveStreamModalProps> = ({
     lastAppliedAnswerRef.current = null;
     iceRetryCountRef.current = 0;
     lastIceRetryAtRef.current = 0;
+    isWebRtcPlayingRef.current = false;
 
     async function attemptAutoIceRestart() {
       const now = Date.now();
@@ -154,6 +180,15 @@ export const AdminLiveStreamModal: React.FC<AdminLiveStreamModalProps> = ({
       }
     }
 
+    const startupWatchdog = setTimeout(() => {
+      if (!isWebRtcPlayingRef.current && webrtcRef.current) {
+        const st = webrtcRef.current.peerConnection?.iceConnectionState;
+        if (st !== 'connected' && st !== 'completed') {
+          attemptAutoIceRestart();
+        }
+      }
+    }, 6000);
+
     async function startAdminConnection() {
       try {
         setConnectionState('connecting');
@@ -167,6 +202,7 @@ export const AdminLiveStreamModal: React.FC<AdminLiveStreamModalProps> = ({
         webrtc.onConnectionStateChange = (state) => {
           setConnectionState(state);
           if (state === 'failed' || state === 'disconnected' || state === 'closed') {
+            isWebRtcPlayingRef.current = false;
             setIsWebRtcPlaying(false);
           }
         };
@@ -174,37 +210,36 @@ export const AdminLiveStreamModal: React.FC<AdminLiveStreamModalProps> = ({
         webrtc.onIceConnectionStateChange = (state) => {
           setIceState(state);
           if (state === 'failed') {
+            isWebRtcPlayingRef.current = false;
             setIsWebRtcPlaying(false);
             attemptAutoIceRestart();
           }
         };
 
-        // When remote stream tracks arrive from secondary phone
-        webrtc.onRemoteStreamTrack = (remoteStream, track) => {
-          setActiveRemoteStream(remoteStream);
-          track.onunmute = () => {
-            if (track.kind === 'video' && videoRef.current) {
+        // Attach remote stream tracks cleanly without resetting srcObject on duplicate track events
+        const attachMediaElements = (remoteStream: MediaStream, track: MediaStreamTrack) => {
+          if (track.kind === 'video' && videoRef.current) {
+            if (videoRef.current.srcObject !== remoteStream) {
               videoRef.current.srcObject = remoteStream;
+            }
+            if (videoRef.current.paused) {
               videoRef.current.play().catch(() => {});
             }
-            if (track.kind === 'audio' && audioRef.current) {
-              audioRef.current.srcObject = remoteStream;
-              audioRef.current.play().catch(() => setAudioNeedsClick(true));
-            }
-          };
-          if (track.kind === 'video' && videoRef.current) {
-            videoRef.current.srcObject = remoteStream;
-            videoRef.current.play().catch((err) => {
-              console.warn('Video play notice:', err);
-            });
           }
           if (track.kind === 'audio' && audioRef.current) {
-            audioRef.current.srcObject = remoteStream;
-            audioRef.current.play().catch((err) => {
-              console.warn('Audio autoplay blocked, requires gesture:', err);
-              setAudioNeedsClick(true);
-            });
+            if (audioRef.current.srcObject !== remoteStream) {
+              audioRef.current.srcObject = remoteStream;
+            }
+            if (audioRef.current.paused) {
+              audioRef.current.play().catch(() => setAudioNeedsClick(true));
+            }
           }
+        };
+
+        webrtc.onRemoteStreamTrack = (remoteStream, track) => {
+          setActiveRemoteStream((prev) => (prev === remoteStream ? prev : remoteStream));
+          attachMediaElements(remoteStream, track);
+          track.onunmute = () => attachMediaElements(remoteStream, track);
         };
 
         webrtc.onControlCommand = (cmd) => {
@@ -219,7 +254,7 @@ export const AdminLiveStreamModal: React.FC<AdminLiveStreamModalProps> = ({
           }
         };
 
-        // Create WebRTC Offer
+        // Create WebRTC Offer & listen for Answer/ICE concurrently
         const offer = await webrtc.createOffer();
         if (offer.sdp) {
           await setSessionOffer(session.sessionId, offer.sdp);
@@ -238,12 +273,14 @@ export const AdminLiveStreamModal: React.FC<AdminLiveStreamModalProps> = ({
         unsubscribeSessionRef.current = listenToSession(session.sessionId, async (updatedSession) => {
           if (updatedSession.status === 'terminated') {
             setConnectionState('terminated');
+            isWebRtcPlayingRef.current = false;
             setIsWebRtcPlaying(false);
             handleTeardown();
             return;
           }
 
-          if (updatedSession.liveFrame) {
+          // Ignore heavy fallback snapshots once live WebRTC video is rendering smoothly
+          if (updatedSession.liveFrame && !isWebRtcPlayingRef.current) {
             setLiveFallbackFrame(updatedSession.liveFrame);
           }
 
@@ -279,11 +316,12 @@ export const AdminLiveStreamModal: React.FC<AdminLiveStreamModalProps> = ({
     startAdminConnection();
 
     return () => {
+      clearTimeout(startupWatchdog);
       handleTeardown();
     };
   }, [session.sessionId, handleTeardown]);
 
-  // Detect WebRTC or multipart MJPEG stream readiness (Chrome doesn't always fire img.onLoad for endless MJPEG)
+  // Detect WebRTC or multipart MJPEG stream readiness without causing idle React re-renders
   useEffect(() => {
     const detector = setInterval(() => {
       const vid = videoRef.current;
@@ -292,27 +330,47 @@ export const AdminLiveStreamModal: React.FC<AdminLiveStreamModalProps> = ({
           vid.play().catch(() => {});
         }
         if (!vid.paused) {
-          setIsWebRtcPlaying(true);
-          setVideoResolution(`${vid.videoWidth} × ${vid.videoHeight}px`);
+          markWebRtcPlaying();
           return;
         }
       }
-      const img = relayImgRef.current;
-      if (img && img.naturalWidth > 0) {
-        setHasRelayFrame(true);
-        setVideoResolution(`${img.naturalWidth} × ${img.naturalHeight}px`);
+      if (!isWebRtcPlayingRef.current) {
+        const img = relayImgRef.current;
+        if (img && img.naturalWidth > 0) {
+          setHasRelayFrame(true);
+          const nextRes = `${img.naturalWidth} × ${img.naturalHeight}px`;
+          if (lastResolutionRef.current !== nextRes) {
+            lastResolutionRef.current = nextRes;
+            setVideoResolution(nextRes);
+          }
+        }
       }
-    }, 200);
+    }, 150);
     return () => clearInterval(detector);
-  }, [viewMode, isVideoPaused]);
+  }, [viewMode, isVideoPaused, markWebRtcPlaying]);
+
+  // Poll live WebRTC transport/FPS/latency metrics when connected
+  useEffect(() => {
+    if (!isWebRtcPlaying) return;
+    const statsTimer = setInterval(async () => {
+      if (!webrtcRef.current) return;
+      const next = await webrtcRef.current.getConnectionStats();
+      setStreamStats(next);
+    }, 1500);
+    return () => clearInterval(statsTimer);
+  }, [isWebRtcPlaying]);
 
   // Synchronize remote stream to video element whenever viewMode or stream changes
   useEffect(() => {
     if (videoRef.current && activeRemoteStream) {
-      videoRef.current.srcObject = activeRemoteStream;
-      videoRef.current.play().catch(console.warn);
+      if (videoRef.current.srcObject !== activeRemoteStream) {
+        videoRef.current.srcObject = activeRemoteStream;
+      }
+      if (videoRef.current.paused && !isVideoPaused) {
+        videoRef.current.play().catch(console.warn);
+      }
     }
-  }, [activeRemoteStream, viewMode]);
+  }, [activeRemoteStream, viewMode, isVideoPaused]);
 
   // Video resolution metadata detector
   const handleVideoLoadedMetadata = () => {
@@ -320,7 +378,11 @@ export const AdminLiveStreamModal: React.FC<AdminLiveStreamModalProps> = ({
       const w = videoRef.current.videoWidth;
       const h = videoRef.current.videoHeight;
       if (w > 0 && h > 0) {
-        setVideoResolution(`${w} × ${h}px`);
+        const nextRes = `${w} × ${h}px`;
+        if (lastResolutionRef.current !== nextRes) {
+          lastResolutionRef.current = nextRes;
+          setVideoResolution(nextRes);
+        }
       }
     }
   };
@@ -525,42 +587,42 @@ export const AdminLiveStreamModal: React.FC<AdminLiveStreamModalProps> = ({
   const isConnected = connectionState === 'connected' || connectionState === 'completed';
 
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center p-2 sm:p-4 bg-black/90 backdrop-blur-md animate-fade-in">
+    <div className="fixed inset-0 z-50 flex items-center justify-center p-1 sm:p-4 bg-black/90 backdrop-blur-md animate-fade-in">
       <div
         ref={containerRef}
-        className="relative bg-slate-950 border border-slate-800 rounded-2xl w-full max-w-5xl h-[92vh] max-h-[900px] shadow-2xl flex flex-col overflow-hidden"
+        className="relative bg-slate-950 border border-slate-800 rounded-xl sm:rounded-2xl w-full max-w-5xl h-[96dvh] sm:h-[92vh] max-h-[900px] shadow-2xl flex flex-col overflow-hidden"
       >
         {/* Stream Top Header Bar */}
-        <div className="flex flex-wrap items-center justify-between gap-3 px-5 py-3 border-b border-slate-800/80 bg-slate-900/90 shrink-0">
-          <div className="flex items-center space-x-3">
-            <span className="flex h-3 w-3 relative">
+        <div className="flex flex-wrap items-center justify-between gap-2 px-3 py-2.5 sm:px-5 sm:py-3 border-b border-slate-800/80 bg-slate-900/90 shrink-0">
+          <div className="flex items-center space-x-2.5 sm:space-x-3 min-w-0 flex-1">
+            <span className="flex h-2.5 w-2.5 sm:h-3 sm:w-3 relative shrink-0">
               <span className={`animate-ping absolute inline-flex h-full w-full rounded-full ${isConnected ? 'bg-emerald-400' : 'bg-amber-400'} opacity-75`} />
-              <span className={`relative inline-flex rounded-full h-3 w-3 ${isConnected ? 'bg-emerald-500' : 'bg-amber-500'}`} />
+              <span className={`relative inline-flex rounded-full h-2.5 w-2.5 sm:h-3 sm:w-3 ${isConnected ? 'bg-emerald-500' : 'bg-amber-500'}`} />
             </span>
-            <div>
-              <div className="flex items-center space-x-2">
-                <h3 className="text-sm font-bold text-white tracking-wide">{device.deviceName}</h3>
-                <span className="px-2 py-0.5 bg-slate-800 text-slate-300 font-mono text-[10px] rounded-md">
+            <div className="min-w-0">
+              <div className="flex items-center space-x-1.5 sm:space-x-2">
+                <h3 className="text-xs sm:text-sm font-bold text-white tracking-wide truncate max-w-[140px] sm:max-w-none">{device.deviceName}</h3>
+                <span className="hidden xs:inline-block px-1.5 sm:px-2 py-0.5 bg-slate-800 text-slate-300 font-mono text-[9px] sm:text-[10px] rounded-md shrink-0">
                   {device.platform.toUpperCase()}
                 </span>
-                <span className="px-2 py-0.5 bg-indigo-500/10 border border-indigo-500/20 text-indigo-400 font-mono text-[10px] rounded-md">
+                <span className="px-1.5 sm:px-2 py-0.5 bg-indigo-500/10 border border-indigo-500/20 text-indigo-400 font-mono text-[10px] rounded-md shrink-0">
                   {timeFormatted}
                 </span>
               </div>
-              <p className="text-[11px] text-slate-400 font-mono">
+              <p className="text-[10px] sm:text-[11px] text-slate-400 font-mono truncate">
                 WebRTC: <span className={isConnected ? 'text-emerald-400 font-semibold' : 'text-amber-400'}>{connectionState}</span> • ICE: {iceState}
               </p>
             </div>
           </div>
 
           {/* Quick Toolbar */}
-          <div className="flex items-center space-x-2">
+          <div className="flex items-center space-x-1.5 sm:space-x-2 shrink-0">
             {/* Viewport Aspect Ratio Toggle */}
             <div className="flex items-center bg-slate-800/80 border border-slate-700/80 rounded-xl p-0.5 text-xs">
               <button
                 type="button"
                 onClick={() => setViewMode('phone')}
-                className={`px-2.5 py-1 rounded-lg text-xs font-medium flex items-center space-x-1.5 transition cursor-pointer ${
+                className={`px-2 sm:px-2.5 py-1 rounded-lg text-xs font-medium flex items-center space-x-1 transition cursor-pointer ${
                   viewMode === 'phone'
                     ? 'bg-indigo-600 text-white shadow-xs'
                     : 'text-slate-400 hover:text-slate-200'
@@ -573,7 +635,7 @@ export const AdminLiveStreamModal: React.FC<AdminLiveStreamModalProps> = ({
               <button
                 type="button"
                 onClick={() => setViewMode('fit')}
-                className={`px-2.5 py-1 rounded-lg text-xs font-medium flex items-center space-x-1.5 transition cursor-pointer ${
+                className={`px-2 sm:px-2.5 py-1 rounded-lg text-xs font-medium flex items-center space-x-1 transition cursor-pointer ${
                   viewMode === 'fit'
                     ? 'bg-indigo-600 text-white shadow-xs'
                     : 'text-slate-400 hover:text-slate-200'
@@ -587,7 +649,7 @@ export const AdminLiveStreamModal: React.FC<AdminLiveStreamModalProps> = ({
 
             <button
               onClick={toggleFullscreen}
-              className="p-2 bg-slate-800 hover:bg-slate-700 border border-slate-700 text-slate-200 rounded-xl transition cursor-pointer"
+              className="hidden sm:inline-flex p-2 bg-slate-800 hover:bg-slate-700 border border-slate-700 text-slate-200 rounded-xl transition cursor-pointer"
               title="Toggle Fullscreen"
             >
               {isFullscreen ? <Minimize2 className="w-4 h-4" /> : <Maximize2 className="w-4 h-4" />}
@@ -597,46 +659,47 @@ export const AdminLiveStreamModal: React.FC<AdminLiveStreamModalProps> = ({
             <button
               onClick={handleAdminDisconnect}
               disabled={isEnding}
-              className="px-3.5 py-1.5 bg-rose-600 hover:bg-rose-500 disabled:opacity-50 text-white rounded-xl text-xs font-bold flex items-center space-x-1.5 shadow-lg shadow-rose-600/25 transition cursor-pointer"
+              className="px-2.5 sm:px-3.5 py-1.5 bg-rose-600 hover:bg-rose-500 disabled:opacity-50 text-white rounded-xl text-xs font-bold flex items-center space-x-1.5 shadow-lg shadow-rose-600/25 transition cursor-pointer whitespace-nowrap"
             >
               <PhoneOff className="w-3.5 h-3.5" />
-              <span>End Session</span>
+              <span className="sm:hidden">End</span>
+              <span className="hidden sm:inline">End Session</span>
             </button>
           </div>
         </div>
 
         {/* Audio prompt banner if autoplay prevented */}
         {audioNeedsClick && (
-          <div className="bg-amber-500/15 border-b border-amber-500/30 px-5 py-2 flex items-center justify-between text-xs text-amber-300">
-            <div className="flex items-center space-x-2">
-              <VolumeX className="w-4 h-4 text-amber-400" />
-              <span>Browser muted audio playback to prevent auto-noise. Click to hear live phone audio.</span>
+          <div className="bg-amber-500/15 border-b border-amber-500/30 px-3 sm:px-5 py-2 flex items-center justify-between gap-2 text-xs text-amber-300 shrink-0">
+            <div className="flex items-center space-x-2 min-w-0">
+              <VolumeX className="w-4 h-4 text-amber-400 shrink-0" />
+              <span className="truncate sm:whitespace-normal">Audio muted by browser. Tap Unmute to hear phone audio.</span>
             </div>
             <button
               onClick={handleEnableAudio}
-              className="px-3 py-1 bg-amber-500 hover:bg-amber-400 text-slate-950 font-bold rounded-lg text-xs transition cursor-pointer"
+              className="px-3 py-1 bg-amber-500 hover:bg-amber-400 text-slate-950 font-bold rounded-lg text-xs transition cursor-pointer shrink-0"
             >
-              Unmute Audio
+              Unmute
             </button>
           </div>
         )}
 
         {/* Feedback Alert toast */}
         {commandFeedback && (
-          <div className="absolute top-16 left-1/2 -translate-x-1/2 z-30 px-4 py-2 bg-indigo-600/90 text-white text-xs font-semibold rounded-xl shadow-2xl backdrop-blur-sm animate-fade-in flex items-center space-x-2">
-            <Activity className="w-4 h-4" />
-            <span>{commandFeedback}</span>
+          <div className="absolute top-14 sm:top-16 left-1/2 -translate-x-1/2 z-30 px-3.5 py-2 bg-indigo-600/95 text-white text-xs font-semibold rounded-xl shadow-2xl backdrop-blur-sm animate-fade-in flex items-center space-x-2 max-w-[90%]">
+            <Activity className="w-4 h-4 shrink-0" />
+            <span className="truncate">{commandFeedback}</span>
           </div>
         )}
 
         {/* Main Center Stage */}
-        <div className="relative flex-1 bg-slate-950 flex items-center justify-center p-3 sm:p-6 overflow-hidden">
+        <div className="relative flex-1 min-h-0 bg-slate-950 flex items-center justify-center p-2 sm:p-6 overflow-hidden">
           {/* Background Ambient Glow */}
           <div className="absolute inset-0 bg-radial from-indigo-950/20 via-transparent to-transparent pointer-events-none" />
 
           {/* Floating Live GPS Mini-Map Overlay */}
           {showMiniMap && (
-            <div className="absolute top-4 right-4 z-40 w-72 sm:w-80 shadow-2xl rounded-2xl overflow-hidden border border-slate-700 bg-slate-950 animate-fade-in">
+            <div className="absolute top-2 left-2 right-2 sm:top-4 sm:left-auto sm:right-4 sm:w-80 z-40 shadow-2xl rounded-2xl overflow-hidden border border-slate-700 bg-slate-950 animate-fade-in">
               <div className="px-3 py-2 bg-slate-900 border-b border-slate-800 flex items-center justify-between text-xs">
                 <div className="flex items-center space-x-1.5 text-white font-bold">
                   <MapPin className="w-3.5 h-3.5 text-emerald-400" />
@@ -674,34 +737,36 @@ export const AdminLiveStreamModal: React.FC<AdminLiveStreamModalProps> = ({
 
           {/* VIEW MODE 1: REALISTIC PHONE FRAME (Requested: camera ratio should be the size of the phone) */}
           {viewMode === 'phone' ? (
-            <div className="relative h-full max-h-[640px] aspect-[9/18.5] max-w-full flex items-center justify-center">
+            <div className="relative h-full max-h-[620px] aspect-[9/18.5] max-w-full flex items-center justify-center">
               {/* Smartphone Outer Metallic Bezel */}
-              <div className="relative w-full h-full bg-slate-900 border-4 border-slate-700/80 rounded-[38px] p-2.5 shadow-[0_20px_50px_rgba(0,0,0,0.8)] flex flex-col ring-1 ring-white/10 overflow-hidden">
+              <div className="relative w-full h-full bg-slate-900 border-[3px] sm:border-4 border-slate-700/80 rounded-[28px] sm:rounded-[38px] p-1.5 sm:p-2.5 shadow-[0_20px_50px_rgba(0,0,0,0.8)] flex flex-col ring-1 ring-white/10 overflow-hidden">
                 {/* Phone Speaker Slit & Front Camera Punch Hole */}
-                <div className="absolute top-3 left-1/2 -translate-x-1/2 z-20 flex items-center space-x-2 pointer-events-none">
-                  <div className="w-12 h-1 bg-slate-800 rounded-full" />
-                  <div className="w-2.5 h-2.5 bg-slate-950 rounded-full border border-slate-800" />
+                <div className="absolute top-2.5 sm:top-3 left-1/2 -translate-x-1/2 z-20 flex items-center space-x-2 pointer-events-none">
+                  <div className="w-10 sm:w-12 h-1 bg-slate-800 rounded-full" />
+                  <div className="w-2 h-2 sm:w-2.5 sm:h-2.5 bg-slate-950 rounded-full border border-slate-800" />
                 </div>
 
                 {/* Phone Screen Display Area */}
-                <div className="relative flex-1 w-full bg-black rounded-[28px] overflow-hidden flex items-center justify-center">
-                  {/* Live WebRTC <video> (kept mounted & non-hidden so Chromium decodes & fires events) */}
+                <div className="relative flex-1 w-full bg-black rounded-[22px] sm:rounded-[28px] overflow-hidden flex items-center justify-center">
+                  {/* Live WebRTC <video> kept visible at full opacity underneath overlays so hardware decoder starts on Frame 1 */}
                   <video
                     ref={videoRef}
                     autoPlay
                     playsInline
                     muted
                     onLoadedMetadata={handleVideoLoadedMetadata}
-                    onCanPlay={() => {
+                    onLoadedData={() => {
                       if (videoRef.current && videoRef.current.videoWidth > 0) {
-                        setIsWebRtcPlaying(true);
+                        markWebRtcPlaying();
                       }
                     }}
-                    onPlaying={() => setIsWebRtcPlaying(true)}
-                    onTimeUpdate={() => setIsWebRtcPlaying(true)}
-                    className={`absolute inset-0 w-full h-full object-cover transition-opacity duration-150 ${
-                      isWebRtcPlaying ? 'opacity-100 z-10' : 'opacity-0 pointer-events-none z-0'
-                    }`}
+                    onCanPlay={() => {
+                      if (videoRef.current && videoRef.current.videoWidth > 0) {
+                        markWebRtcPlaying();
+                      }
+                    }}
+                    onPlaying={markWebRtcPlaying}
+                    className="absolute inset-0 w-full h-full object-cover z-10"
                   />
 
                   {/* Smooth High-FPS MJPEG Live Stream Fallback when WebRTC isn't playing */}
@@ -713,12 +778,14 @@ export const AdminLiveStreamModal: React.FC<AdminLiveStreamModalProps> = ({
                       onLoad={() => {
                         setHasRelayFrame(true);
                         if (relayImgRef.current && relayImgRef.current.naturalWidth > 0) {
-                          setVideoResolution(`${relayImgRef.current.naturalWidth} × ${relayImgRef.current.naturalHeight}px`);
+                          const nextRes = `${relayImgRef.current.naturalWidth} × ${relayImgRef.current.naturalHeight}px`;
+                          lastResolutionRef.current = nextRes;
+                          setVideoResolution(nextRes);
                         }
                       }}
                       onError={() => setHasRelayFrame(false)}
                       className={`absolute inset-0 w-full h-full object-cover ${
-                        hasRelayFrame ? 'opacity-100 z-10' : 'opacity-0 pointer-events-none z-0'
+                        hasRelayFrame ? 'opacity-100 z-[15]' : 'opacity-0 pointer-events-none z-0'
                       }`}
                     />
                   )}
@@ -730,11 +797,13 @@ export const AdminLiveStreamModal: React.FC<AdminLiveStreamModalProps> = ({
                       src={liveFallbackFrame}
                       alt="Phone Live Camera"
                       onLoad={() => {
-                        if (fallbackImgRef.current && fallbackImgRef.current.naturalWidth > 0 && videoResolution === 'Detecting feed...') {
-                          setVideoResolution(`${fallbackImgRef.current.naturalWidth} × ${fallbackImgRef.current.naturalHeight}px`);
+                        if (fallbackImgRef.current && fallbackImgRef.current.naturalWidth > 0 && lastResolutionRef.current === 'Detecting feed...') {
+                          const nextRes = `${fallbackImgRef.current.naturalWidth} × ${fallbackImgRef.current.naturalHeight}px`;
+                          lastResolutionRef.current = nextRes;
+                          setVideoResolution(nextRes);
                         }
                       }}
-                      className="absolute inset-0 w-full h-full object-cover z-10"
+                      className="absolute inset-0 w-full h-full object-cover z-[15]"
                     />
                   )}
 
@@ -743,7 +812,7 @@ export const AdminLiveStreamModal: React.FC<AdminLiveStreamModalProps> = ({
 
                   {/* Connecting / Standby State Overlay inside Phone Screen */}
                   {!isWebRtcPlaying && !hasRelayFrame && !liveFallbackFrame && (
-                    <div className="absolute inset-0 flex flex-col items-center justify-center p-6 bg-slate-950/85 backdrop-blur-xs text-center z-20">
+                    <div className="absolute inset-0 flex flex-col items-center justify-center p-6 bg-slate-950/90 backdrop-blur-xs text-center z-20">
                       <Loader2 className="w-8 h-8 text-indigo-400 animate-spin mb-3" />
                       <h4 className="text-white text-xs font-semibold">Connecting to Android Phone</h4>
                       <p className="text-[11px] text-slate-400 mt-1 max-w-[200px] leading-relaxed">
@@ -763,7 +832,15 @@ export const AdminLiveStreamModal: React.FC<AdminLiveStreamModalProps> = ({
                   <div className="absolute bottom-3 left-3 right-3 flex items-center justify-between pointer-events-none z-30">
                     <span className="px-2 py-0.5 bg-black/60 backdrop-blur-md border border-white/10 rounded-md text-[10px] font-mono text-emerald-400 flex items-center space-x-1">
                       <span className="w-1.5 h-1.5 bg-emerald-400 rounded-full animate-ping" />
-                      <span>{isWebRtcPlaying ? 'LIVE (WebRTC 60fps)' : (hasRelayFrame ? 'LIVE (HD Relay)' : (liveFallbackFrame ? 'LIVE (Sync)' : 'CONNECTING'))}</span>
+                      <span>
+                        {isWebRtcPlaying
+                          ? `LIVE (${streamStats.transport === 'relay' ? 'Relay' : 'P2P'}${streamStats.fps !== null ? ` • ${streamStats.fps}fps` : ''}${streamStats.rttMs !== null ? ` • ${streamStats.rttMs}ms` : ''})`
+                          : hasRelayFrame
+                            ? 'LIVE (HD Relay)'
+                            : liveFallbackFrame
+                              ? 'LIVE (Sync)'
+                              : 'CONNECTING'}
+                      </span>
                     </span>
                     <span className="px-2 py-0.5 bg-black/60 backdrop-blur-md border border-white/10 rounded-md text-[10px] font-mono text-slate-300">
                       {videoResolution}
@@ -786,16 +863,18 @@ export const AdminLiveStreamModal: React.FC<AdminLiveStreamModalProps> = ({
                 playsInline
                 muted
                 onLoadedMetadata={handleVideoLoadedMetadata}
-                onCanPlay={() => {
+                onLoadedData={() => {
                   if (videoRef.current && videoRef.current.videoWidth > 0) {
-                    setIsWebRtcPlaying(true);
+                    markWebRtcPlaying();
                   }
                 }}
-                onPlaying={() => setIsWebRtcPlaying(true)}
-                onTimeUpdate={() => setIsWebRtcPlaying(true)}
-                className={`absolute inset-0 w-full h-full object-contain transition-opacity duration-150 ${
-                  isWebRtcPlaying ? 'opacity-100 z-10' : 'opacity-0 pointer-events-none z-0'
-                }`}
+                onCanPlay={() => {
+                  if (videoRef.current && videoRef.current.videoWidth > 0) {
+                    markWebRtcPlaying();
+                  }
+                }}
+                onPlaying={markWebRtcPlaying}
+                className="absolute inset-0 w-full h-full object-contain z-10"
               />
 
               {!isWebRtcPlaying && !isStaticHost && (
@@ -806,12 +885,14 @@ export const AdminLiveStreamModal: React.FC<AdminLiveStreamModalProps> = ({
                   onLoad={() => {
                     setHasRelayFrame(true);
                     if (relayImgRef.current && relayImgRef.current.naturalWidth > 0) {
-                      setVideoResolution(`${relayImgRef.current.naturalWidth} × ${relayImgRef.current.naturalHeight}px`);
+                      const nextRes = `${relayImgRef.current.naturalWidth} × ${relayImgRef.current.naturalHeight}px`;
+                      lastResolutionRef.current = nextRes;
+                      setVideoResolution(nextRes);
                     }
                   }}
                   onError={() => setHasRelayFrame(false)}
                   className={`absolute inset-0 w-full h-full object-contain ${
-                    hasRelayFrame ? 'opacity-100 z-10' : 'opacity-0 pointer-events-none z-0'
+                    hasRelayFrame ? 'opacity-100 z-[15]' : 'opacity-0 pointer-events-none z-0'
                   }`}
                 />
               )}
@@ -821,14 +902,14 @@ export const AdminLiveStreamModal: React.FC<AdminLiveStreamModalProps> = ({
                   ref={fallbackImgRef}
                   src={liveFallbackFrame}
                   alt="Phone Live Camera"
-                  className="absolute inset-0 w-full h-full object-contain z-10"
+                  className="absolute inset-0 w-full h-full object-contain z-[15]"
                 />
               )}
 
               <audio ref={audioRef} autoPlay />
 
               {!isWebRtcPlaying && !hasRelayFrame && !liveFallbackFrame && (
-                <div className="absolute inset-0 flex flex-col items-center justify-center p-6 bg-slate-950/85 backdrop-blur-xs text-center z-20">
+                <div className="absolute inset-0 flex flex-col items-center justify-center p-6 bg-slate-950/90 backdrop-blur-xs text-center z-20">
                   <Loader2 className="w-10 h-10 text-indigo-400 animate-spin mb-3" />
                   <h4 className="text-white text-sm font-semibold">Connecting to Android Phone</h4>
                   <p className="text-xs text-slate-400 mt-1 max-w-sm">
@@ -848,7 +929,15 @@ export const AdminLiveStreamModal: React.FC<AdminLiveStreamModalProps> = ({
               <div className="absolute bottom-4 left-4 right-4 flex items-center justify-between pointer-events-none z-30">
                 <span className="px-2.5 py-1 bg-black/70 backdrop-blur-md border border-white/10 rounded-md text-xs font-mono text-emerald-400 flex items-center space-x-1.5">
                   <span className="w-2 h-2 bg-emerald-400 rounded-full animate-ping" />
-                  <span>{isWebRtcPlaying ? 'LIVE (WebRTC 60fps)' : (hasRelayFrame ? 'LIVE (HD Relay)' : (liveFallbackFrame ? 'LIVE (Sync)' : 'CONNECTING'))}</span>
+                  <span>
+                    {isWebRtcPlaying
+                      ? `LIVE (${streamStats.transport === 'relay' ? 'Relay' : 'P2P'}${streamStats.fps !== null ? ` • ${streamStats.fps}fps` : ''}${streamStats.rttMs !== null ? ` • ${streamStats.rttMs}ms` : ''})`
+                      : hasRelayFrame
+                        ? 'LIVE (HD Relay)'
+                        : liveFallbackFrame
+                          ? 'LIVE (Sync)'
+                          : 'CONNECTING'}
+                  </span>
                 </span>
                 <span className="px-2.5 py-1 bg-black/70 backdrop-blur-md border border-white/10 rounded-md text-xs font-mono text-slate-300">
                   {videoResolution}
@@ -859,89 +948,95 @@ export const AdminLiveStreamModal: React.FC<AdminLiveStreamModalProps> = ({
         </div>
 
         {/* BOTTOM ACTION BUTTONS CONSOLE (make all these buttons work) */}
-        <div className="px-5 py-3 bg-slate-900 border-t border-slate-800 flex flex-wrap items-center justify-between gap-3 shrink-0">
+        <div className="px-2.5 py-2.5 sm:px-5 sm:py-3 bg-slate-900 border-t border-slate-800 flex flex-col lg:flex-row lg:items-center justify-between gap-2 sm:gap-3 shrink-0 pb-[calc(0.625rem+env(safe-area-inset-bottom))] sm:pb-3">
           {/* Left: Remote Control Actions */}
-          <div className="flex flex-wrap items-center gap-2">
+          <div className="grid grid-cols-4 sm:flex sm:flex-wrap items-center gap-1.5 sm:gap-2">
             {/* Switch Camera */}
             <button
               type="button"
               onClick={handleRemoteSwitchCamera}
-              className="px-3.5 py-2 bg-slate-800 hover:bg-slate-700 text-slate-200 border border-slate-700 rounded-xl text-xs font-semibold flex items-center space-x-2 transition cursor-pointer shadow-xs active:scale-95"
+              className="px-1.5 py-2 sm:px-3.5 sm:py-2 bg-slate-800 hover:bg-slate-700 text-slate-200 border border-slate-700 rounded-xl text-[10px] sm:text-xs font-semibold flex flex-col sm:flex-row items-center justify-center gap-1 sm:space-x-2 transition cursor-pointer shadow-xs active:scale-95"
               title="Flip between Rear and Front phone camera"
             >
-              <RefreshCw className="w-3.5 h-3.5 text-indigo-400" />
-              <span>{remoteCameraFacing === 'environment' ? 'Switch to Front' : 'Switch to Back'}</span>
+              <RefreshCw className="w-3.5 h-3.5 text-indigo-400 shrink-0" />
+              <span className="sm:hidden leading-tight text-center">{remoteCameraFacing === 'environment' ? 'Front' : 'Back'}</span>
+              <span className="hidden sm:inline">{remoteCameraFacing === 'environment' ? 'Switch to Front' : 'Switch to Back'}</span>
             </button>
 
             {/* Mirror Phone Screen */}
             <button
               type="button"
               onClick={isScreenSharing ? handleRemoteRequestCamera : handleRemoteRequestScreen}
-              className={`px-3.5 py-2 border rounded-xl text-xs font-semibold flex items-center space-x-2 transition cursor-pointer shadow-xs active:scale-95 ${
+              className={`px-1.5 py-2 sm:px-3.5 sm:py-2 border rounded-xl text-[10px] sm:text-xs font-semibold flex flex-col sm:flex-row items-center justify-center gap-1 sm:space-x-2 transition cursor-pointer shadow-xs active:scale-95 ${
                 isScreenSharing
                   ? 'bg-indigo-600/30 border-indigo-500/50 text-indigo-300'
                   : 'bg-slate-800 hover:bg-slate-700 text-slate-200 border-slate-700'
               }`}
               title="Mirror Phone Screen / Switch Back to Camera"
             >
-              <Monitor className="w-3.5 h-3.5 text-indigo-400" />
-              <span>{isScreenSharing ? 'Switch to Camera' : 'Mirror Screen'}</span>
+              <Monitor className="w-3.5 h-3.5 text-indigo-400 shrink-0" />
+              <span className="sm:hidden leading-tight text-center">{isScreenSharing ? 'Camera' : 'Screen'}</span>
+              <span className="hidden sm:inline">{isScreenSharing ? 'Switch to Camera' : 'Mirror Screen'}</span>
             </button>
 
             {/* Toggle Flashlight / Torch */}
             <button
               type="button"
               onClick={handleRemoteToggleTorch}
-              className={`px-3.5 py-2 border rounded-xl text-xs font-semibold flex items-center space-x-2 transition cursor-pointer shadow-xs active:scale-95 ${
+              className={`px-1.5 py-2 sm:px-3.5 sm:py-2 border rounded-xl text-[10px] sm:text-xs font-semibold flex flex-col sm:flex-row items-center justify-center gap-1 sm:space-x-2 transition cursor-pointer shadow-xs active:scale-95 ${
                 isTorchOn
                   ? 'bg-amber-500/20 border-amber-500/40 text-amber-300'
                   : 'bg-slate-800 hover:bg-slate-700 text-slate-200 border-slate-700'
               }`}
               title="Toggle Phone LED Flashlight / Torch"
             >
-              {isTorchOn ? <Zap className="w-3.5 h-3.5 text-amber-400 fill-amber-400" /> : <ZapOff className="w-3.5 h-3.5 text-slate-400" />}
-              <span>Flashlight {isTorchOn ? 'ON' : 'OFF'}</span>
+              {isTorchOn ? <Zap className="w-3.5 h-3.5 text-amber-400 fill-amber-400 shrink-0" /> : <ZapOff className="w-3.5 h-3.5 text-slate-400 shrink-0" />}
+              <span className="sm:hidden leading-tight text-center">{isTorchOn ? 'Light ON' : 'Light'}</span>
+              <span className="hidden sm:inline">Flashlight {isTorchOn ? 'ON' : 'OFF'}</span>
             </button>
 
             {/* Mute Audio */}
             <button
               type="button"
               onClick={toggleAudio}
-              className={`px-3.5 py-2 border rounded-xl text-xs font-semibold flex items-center space-x-2 transition cursor-pointer shadow-xs active:scale-95 ${
+              className={`px-1.5 py-2 sm:px-3.5 sm:py-2 border rounded-xl text-[10px] sm:text-xs font-semibold flex flex-col sm:flex-row items-center justify-center gap-1 sm:space-x-2 transition cursor-pointer shadow-xs active:scale-95 ${
                 isAudioMuted
                   ? 'bg-rose-500/20 border-rose-500/30 text-rose-300'
                   : 'bg-slate-800 hover:bg-slate-700 text-slate-200 border-slate-700'
               }`}
               title={isAudioMuted ? 'Unmute Phone Speaker Audio' : 'Mute Phone Audio'}
             >
-              {isAudioMuted ? <VolumeX className="w-3.5 h-3.5 text-rose-400" /> : <Volume2 className="w-3.5 h-3.5 text-emerald-400" />}
-              <span>{isAudioMuted ? 'Unmute Audio' : 'Mute Audio'}</span>
+              {isAudioMuted ? <VolumeX className="w-3.5 h-3.5 text-rose-400 shrink-0" /> : <Volume2 className="w-3.5 h-3.5 text-emerald-400 shrink-0" />}
+              <span className="sm:hidden leading-tight text-center">{isAudioMuted ? 'Unmute' : 'Audio'}</span>
+              <span className="hidden sm:inline">{isAudioMuted ? 'Unmute Audio' : 'Mute Audio'}</span>
             </button>
 
             {/* Pause / Resume Video */}
             <button
               type="button"
               onClick={toggleVideoPlayback}
-              className="px-3.5 py-2 bg-slate-800 hover:bg-slate-700 text-slate-200 border border-slate-700 rounded-xl text-xs font-semibold flex items-center space-x-2 transition cursor-pointer shadow-xs active:scale-95"
+              className="px-1.5 py-2 sm:px-3.5 sm:py-2 bg-slate-800 hover:bg-slate-700 text-slate-200 border border-slate-700 rounded-xl text-[10px] sm:text-xs font-semibold flex flex-col sm:flex-row items-center justify-center gap-1 sm:space-x-2 transition cursor-pointer shadow-xs active:scale-95"
               title="Pause or Resume Video Stream"
             >
-              {isVideoPaused ? <Play className="w-3.5 h-3.5 text-emerald-400" /> : <Pause className="w-3.5 h-3.5 text-amber-400" />}
-              <span>{isVideoPaused ? 'Resume Video' : 'Pause Video'}</span>
+              {isVideoPaused ? <Play className="w-3.5 h-3.5 text-emerald-400 shrink-0" /> : <Pause className="w-3.5 h-3.5 text-amber-400 shrink-0" />}
+              <span className="sm:hidden leading-tight text-center">{isVideoPaused ? 'Resume' : 'Pause'}</span>
+              <span className="hidden sm:inline">{isVideoPaused ? 'Resume Video' : 'Pause Video'}</span>
             </button>
 
             {/* HD Snapshot */}
             <button
               type="button"
               onClick={handleTakeSnapshot}
-              className={`px-3.5 py-2 border rounded-xl text-xs font-semibold flex items-center space-x-2 transition cursor-pointer shadow-xs active:scale-95 ${
+              className={`px-1.5 py-2 sm:px-3.5 sm:py-2 border rounded-xl text-[10px] sm:text-xs font-semibold flex flex-col sm:flex-row items-center justify-center gap-1 sm:space-x-2 transition cursor-pointer shadow-xs active:scale-95 ${
                 snapshotSuccess
                   ? 'bg-emerald-600 border-emerald-500 text-white'
                   : 'bg-slate-800 hover:bg-slate-700 text-slate-200 border-slate-700'
               }`}
               title="Save high-resolution photo from stream"
             >
-              <Download className="w-3.5 h-3.5 text-indigo-400" />
-              <span>{snapshotSuccess ? 'Snapshot Saved!' : 'Take Snapshot'}</span>
+              <Download className="w-3.5 h-3.5 text-indigo-400 shrink-0" />
+              <span className="sm:hidden leading-tight text-center">{snapshotSuccess ? 'Saved' : 'Snap'}</span>
+              <span className="hidden sm:inline">{snapshotSuccess ? 'Snapshot Saved!' : 'Take Snapshot'}</span>
             </button>
 
             {/* GPS Location & Mini-Map Toggle */}
@@ -953,34 +1048,46 @@ export const AdminLiveStreamModal: React.FC<AdminLiveStreamModalProps> = ({
                   handleRemoteRequestLocation();
                 }
               }}
-              className={`px-3.5 py-2 border rounded-xl text-xs font-semibold flex items-center space-x-2 transition cursor-pointer shadow-xs active:scale-95 ${
+              className={`px-1.5 py-2 sm:px-3.5 sm:py-2 border rounded-xl text-[10px] sm:text-xs font-semibold flex flex-col sm:flex-row items-center justify-center gap-1 sm:space-x-2 transition cursor-pointer shadow-xs active:scale-95 ${
                 showMiniMap
                   ? 'bg-emerald-600/30 border-emerald-500/50 text-emerald-300'
                   : 'bg-slate-800 hover:bg-slate-700 text-slate-200 border-slate-700'
               }`}
               title="Toggle Live GPS Location Mini-Map & Ping Location"
             >
-              <MapPin className={`w-3.5 h-3.5 ${showMiniMap ? 'text-emerald-400' : 'text-slate-400'}`} />
-              <span>{showMiniMap ? 'Hide GPS Map' : 'Phone Location'}</span>
+              <MapPin className={`w-3.5 h-3.5 shrink-0 ${showMiniMap ? 'text-emerald-400' : 'text-slate-400'}`} />
+              <span className="sm:hidden leading-tight text-center">{showMiniMap ? 'Hide Map' : 'Location'}</span>
+              <span className="hidden sm:inline">{showMiniMap ? 'Hide GPS Map' : 'Phone Location'}</span>
               {liveDeviceLocation && (
-                <span className="w-2 h-2 rounded-full bg-emerald-400 animate-pulse" />
+                <span className="hidden sm:inline-block w-2 h-2 rounded-full bg-emerald-400 animate-pulse" />
               )}
             </button>
-          </div>
 
-          {/* Right: Diagnostics & Disconnect */}
-          <div className="flex items-center space-x-3 text-xs">
+            {/* Mobile quick Reconnect button inside the 4x2 grid */}
             <button
               type="button"
               onClick={handleRetryIce}
-              className="px-2.5 py-1.5 bg-slate-800/80 hover:bg-slate-800 text-slate-400 hover:text-slate-200 rounded-lg text-[11px] font-mono flex items-center space-x-1.5 transition cursor-pointer border border-slate-700/60"
+              className="sm:hidden px-1.5 py-2 bg-slate-800 hover:bg-slate-700 text-slate-200 border border-slate-700 rounded-xl text-[10px] font-semibold flex flex-col items-center justify-center gap-1 transition cursor-pointer shadow-xs active:scale-95"
+              title="Reconnect WebRTC PeerConnection"
+            >
+              <Wifi className="w-3.5 h-3.5 text-indigo-400 shrink-0" />
+              <span className="leading-tight text-center">Reconnect</span>
+            </button>
+          </div>
+
+          {/* Right: Diagnostics & Disconnect (Desktop + Compact Mobile Bar) */}
+          <div className="flex items-center justify-between sm:justify-end space-x-3 text-xs pt-0.5 sm:pt-0">
+            <button
+              type="button"
+              onClick={handleRetryIce}
+              className="hidden sm:flex px-2.5 py-1.5 bg-slate-800/80 hover:bg-slate-800 text-slate-400 hover:text-slate-200 rounded-lg text-[11px] font-mono items-center space-x-1.5 transition cursor-pointer border border-slate-700/60"
               title="Reconnect WebRTC PeerConnection"
             >
               <Wifi className="w-3.5 h-3.5 text-indigo-400" />
               <span>Reconnect ICE</span>
             </button>
 
-            <span className="text-slate-500 font-mono text-[11px]">
+            <span className="text-slate-500 font-mono text-[10px] sm:text-[11px]">
               Res: <strong className="text-slate-300 font-normal">{videoResolution}</strong>
             </span>
           </div>

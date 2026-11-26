@@ -220,44 +220,44 @@ export const PairingModal: React.FC<PairingModalProps> = ({
   const progressPercent = Math.min(100, (timeLeftSeconds / 300) * 100);
 
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/85 backdrop-blur-sm animate-fade-in">
-      <div className="bg-slate-900 border border-slate-700/80 rounded-2xl w-full max-w-lg shadow-2xl overflow-hidden flex flex-col max-h-[95vh]">
+    <div className="fixed inset-0 z-50 flex items-center justify-center p-2.5 sm:p-4 bg-black/85 backdrop-blur-sm animate-fade-in">
+      <div className="bg-slate-900 border border-slate-700/80 rounded-2xl w-full max-w-lg shadow-2xl overflow-hidden flex flex-col max-h-[94dvh]">
         {/* Header */}
-        <div className="flex items-center justify-between px-6 py-4 border-b border-slate-800 bg-slate-950/60">
-          <div className="flex items-center space-x-3">
-            <div className="p-2 bg-indigo-500/10 border border-indigo-500/20 rounded-xl text-indigo-400">
+        <div className="flex items-center justify-between gap-2 px-4 py-3 sm:px-6 sm:py-4 border-b border-slate-800 bg-slate-950/60 shrink-0">
+          <div className="flex items-center space-x-2.5 sm:space-x-3 min-w-0">
+            <div className="p-2 bg-indigo-500/10 border border-indigo-500/20 rounded-xl text-indigo-400 shrink-0">
               <QrCode className="w-5 h-5" />
             </div>
-            <div>
-              <div className="flex items-center space-x-2">
-                <h3 className="text-base font-semibold text-white">Pair Any Android Phone</h3>
-                <span className="px-2 py-0.5 bg-emerald-500/15 border border-emerald-500/30 text-emerald-300 text-[10px] font-mono rounded-full font-semibold">
-                  UNIVERSAL ANDROID
+            <div className="min-w-0">
+              <div className="flex flex-wrap items-center gap-1.5">
+                <h3 className="text-sm sm:text-base font-semibold text-white truncate">Pair Any Phone</h3>
+                <span className="px-2 py-0.5 bg-emerald-500/15 border border-emerald-500/30 text-emerald-300 text-[9px] sm:text-[10px] font-mono rounded-full font-semibold whitespace-nowrap">
+                  UNIVERSAL MOBILE
                 </span>
               </div>
-              <p className="text-xs text-slate-400">Scan with Google Lens, Samsung Camera, or any QR app</p>
+              <p className="text-[11px] sm:text-xs text-slate-400 truncate">Scan with Camera, Google Lens, or QR scanner</p>
             </div>
           </div>
           <button
             onClick={onClose}
-            className="p-1.5 text-slate-400 hover:text-white hover:bg-slate-800 rounded-lg transition-colors cursor-pointer"
+            className="p-1.5 text-slate-400 hover:text-white hover:bg-slate-800 rounded-lg transition-colors cursor-pointer shrink-0"
           >
             <X className="w-5 h-5" />
           </button>
         </div>
 
         {/* Content */}
-        <div className="p-6 flex flex-col items-center overflow-y-auto">
+        <div className="p-4 sm:p-6 flex flex-col items-center overflow-y-auto">
           {/* Target Host Selector (Public Phone URL vs Current Host) */}
-          <div className="w-full mb-3.5 p-2 bg-slate-950/80 border border-slate-800 rounded-xl flex flex-col space-y-2 text-xs">
-            <div className="flex items-center justify-between">
+          <div className="w-full mb-3.5 p-2.5 bg-slate-950/80 border border-slate-800 rounded-xl flex flex-col space-y-2 text-xs">
+            <div className="flex items-center justify-between gap-2">
               <span className="text-slate-300 text-[11px] pl-0.5 flex items-center font-medium">
-                <Globe className="w-3.5 h-3.5 mr-1.5 text-indigo-400" />
+                <Globe className="w-3.5 h-3.5 mr-1.5 text-indigo-400 shrink-0" />
                 Target Network:
               </span>
-              <span className="flex items-center text-[10px] text-emerald-400 font-mono font-medium bg-emerald-500/10 px-2 py-0.5 rounded-full border border-emerald-500/20">
+              <span className="flex items-center text-[10px] text-emerald-400 font-mono font-medium bg-emerald-500/10 px-2 py-0.5 rounded-full border border-emerald-500/20 whitespace-nowrap">
                 <span className="w-1.5 h-1.5 rounded-full bg-emerald-400 animate-pulse mr-1.5" />
-                Online & Functional
+                Online
               </span>
             </div>
 
@@ -265,7 +265,7 @@ export const PairingModal: React.FC<PairingModalProps> = ({
               <button
                 type="button"
                 onClick={() => setNetworkMode('current')}
-                className={`px-3 py-1.5 rounded-lg text-[11px] font-semibold transition cursor-pointer flex items-center justify-center space-x-1 ${
+                className={`px-2.5 py-2 sm:py-1.5 rounded-lg text-[11px] font-semibold transition cursor-pointer flex items-center justify-center space-x-1 ${
                   networkMode === 'current'
                     ? 'bg-indigo-600 text-white shadow-xs'
                     : 'bg-slate-900 text-slate-400 hover:text-slate-200 hover:bg-slate-800'
@@ -277,15 +277,15 @@ export const PairingModal: React.FC<PairingModalProps> = ({
               <button
                 type="button"
                 onClick={() => setNetworkMode('public')}
-                className={`px-3 py-1.5 rounded-lg text-[11px] font-semibold transition cursor-pointer flex items-center justify-center space-x-1 ${
+                className={`px-2.5 py-2 sm:py-1.5 rounded-lg text-[11px] font-semibold transition cursor-pointer flex items-center justify-center space-x-1 ${
                   networkMode === 'public'
                     ? 'bg-indigo-600 text-white shadow-xs'
                     : 'bg-slate-900 text-slate-400 hover:text-slate-200 hover:bg-slate-800'
                 }`}
                 title="Public Shared URL (requires clicking Share in AI Studio first)"
               >
-                <span>
-                  Shared Phone URL{' '}
+                <span className="truncate">
+                  Shared URL{' '}
                   {sharedHostLive === false ? '(404)' : sharedHostLive === true ? '(Live)' : ''}
                 </span>
               </button>
@@ -303,15 +303,15 @@ export const PairingModal: React.FC<PairingModalProps> = ({
               </div>
             )}
 
-            <div className="flex items-center justify-between pt-1.5 border-t border-slate-800/80 text-[10px]">
-              <span className="text-slate-500 truncate mr-2">
+            <div className="flex flex-wrap items-center justify-between gap-2 pt-1.5 border-t border-slate-800/80 text-[10px]">
+              <span className="text-slate-500 truncate min-w-0 flex-1">
                 Host: <span className="text-slate-300 font-mono">{selectedBaseOrigin}</span>
               </span>
               <div className="flex space-x-1.5 shrink-0">
                 <button
                   type="button"
                   onClick={() => setNetworkMode(networkMode === 'github' ? 'public' : 'github')}
-                  className={`px-2 py-0.5 rounded text-[10px] font-medium transition cursor-pointer ${
+                  className={`px-2 py-1 rounded text-[10px] font-medium transition cursor-pointer ${
                     networkMode === 'github'
                       ? 'bg-purple-600 text-white'
                       : 'text-slate-400 hover:text-indigo-300 bg-slate-900 border border-slate-800'
@@ -323,7 +323,7 @@ export const PairingModal: React.FC<PairingModalProps> = ({
                 <button
                   type="button"
                   onClick={() => setNetworkMode(networkMode === 'custom' ? 'public' : 'custom')}
-                  className={`px-2 py-0.5 rounded text-[10px] font-medium transition cursor-pointer ${
+                  className={`px-2 py-1 rounded text-[10px] font-medium transition cursor-pointer ${
                     networkMode === 'custom'
                       ? 'bg-indigo-600 text-white'
                       : 'text-slate-400 hover:text-indigo-300 bg-slate-900 border border-slate-800'
@@ -342,14 +342,14 @@ export const PairingModal: React.FC<PairingModalProps> = ({
                   placeholder="e.g. https://xyz.ngrok-free.app or http://192.168.1.50:3000"
                   value={customHost}
                   onChange={(e) => setCustomHost(e.target.value)}
-                  className="w-full bg-slate-900 border border-slate-700 text-slate-200 text-xs px-2.5 py-1.5 rounded-lg font-mono focus:outline-hidden focus:border-indigo-500"
+                  className="w-full bg-slate-900 border border-slate-700 text-slate-200 text-xs px-2.5 py-2 rounded-lg font-mono focus:outline-hidden focus:border-indigo-500"
                 />
               </div>
             )}
           </div>
 
           {loading && !token ? (
-            <div className="py-16 flex flex-col items-center">
+            <div className="py-12 sm:py-16 flex flex-col items-center">
               <div className="w-10 h-10 border-4 border-indigo-500/20 border-t-indigo-500 rounded-full animate-spin" />
               <p className="mt-3 text-xs font-mono text-slate-400">Generating cryptographic pairing token...</p>
             </div>
@@ -367,20 +367,20 @@ export const PairingModal: React.FC<PairingModalProps> = ({
           ) : (
             <>
               {/* High-Contrast Crisp QR Code Container (Vector SVG) */}
-              <div className="relative p-4 bg-white rounded-2xl shadow-2xl flex items-center justify-center min-w-[270px] min-h-[270px]">
+              <div className="relative p-3 sm:p-4 bg-white rounded-2xl shadow-2xl flex items-center justify-center w-full max-w-[236px] sm:max-w-[270px] aspect-square">
                 {qrSvg ? (
                   <div
-                    className="w-60 h-60 [&>svg]:w-full [&>svg]:h-full [&>svg]:block rounded-lg"
+                    className="w-48 h-48 sm:w-60 sm:h-60 [&>svg]:w-full [&>svg]:h-full [&>svg]:block rounded-lg"
                     dangerouslySetInnerHTML={{ __html: qrSvg }}
                   />
                 ) : qrPngUrl ? (
                   <img
                     src={qrPngUrl}
                     alt="Pairing QR Code"
-                    className="w-60 h-60 object-contain rounded-lg block"
+                    className="w-48 h-48 sm:w-60 sm:h-60 object-contain rounded-lg block"
                   />
                 ) : (
-                  <div className="w-60 h-60 flex items-center justify-center">
+                  <div className="w-48 h-48 sm:w-60 sm:h-60 flex items-center justify-center">
                     <div className="w-8 h-8 border-3 border-indigo-500 border-t-transparent rounded-full animate-spin" />
                   </div>
                 )}
@@ -424,8 +424,8 @@ export const PairingModal: React.FC<PairingModalProps> = ({
               </div>
 
               {/* Monospace Pairing Token Box */}
-              <div className="w-full mt-3 p-3 bg-slate-950/80 border border-slate-800 rounded-xl flex items-center justify-between">
-                <div className="overflow-hidden mr-2">
+              <div className="w-full mt-3 p-3 bg-slate-950/80 border border-slate-800 rounded-xl flex items-center justify-between gap-2">
+                <div className="overflow-hidden min-w-0 flex-1">
                   <span className="text-[10px] text-slate-500 uppercase tracking-wider block">Pairing Token (48-char hex)</span>
                   <span className="font-mono text-xs text-indigo-300 font-semibold truncate block select-all">
                     {token}
@@ -445,7 +445,7 @@ export const PairingModal: React.FC<PairingModalProps> = ({
               <div className="w-full mt-3 p-2.5 bg-slate-800/60 border border-slate-700/60 rounded-xl flex items-start space-x-2">
                 <ShieldCheck className="w-4 h-4 text-emerald-400 shrink-0 mt-0.5" />
                 <p className="text-[11px] text-slate-300 leading-relaxed">
-                  Single-use cryptographic token bound to the authorized administrator. Compatible with any Android smartphone (Samsung, Pixel, Xiaomi, OnePlus, Motorola, etc.).
+                  Single-use cryptographic token bound to the authorized administrator. Compatible with Android &amp; iOS smartphones.
                 </p>
               </div>
 
@@ -455,7 +455,7 @@ export const PairingModal: React.FC<PairingModalProps> = ({
                   type="text"
                   readOnly
                   value={pairingUrl}
-                  className="bg-slate-950 border border-slate-800 text-slate-300 text-xs px-3 py-2 rounded-xl flex-1 font-mono truncate focus:outline-hidden"
+                  className="bg-slate-950 border border-slate-800 text-slate-300 text-xs px-3 py-2 rounded-xl flex-1 min-w-0 font-mono truncate focus:outline-hidden"
                 />
                 <button
                   onClick={copyLink}
@@ -481,13 +481,13 @@ export const PairingModal: React.FC<PairingModalProps> = ({
         </div>
 
         {/* Footer */}
-        <div className="px-6 py-3 border-t border-slate-800 bg-slate-950/60 flex items-center justify-between">
+        <div className="px-4 py-3 sm:px-6 border-t border-slate-800 bg-slate-950/60 flex items-center justify-between shrink-0">
           <button
             onClick={generateToken}
             disabled={loading}
-            className="text-xs text-indigo-400 hover:text-indigo-300 flex items-center space-x-1 transition cursor-pointer"
+            className="text-xs text-indigo-400 hover:text-indigo-300 flex items-center space-x-1.5 transition cursor-pointer py-1"
           >
-            <RefreshCw className="w-3 h-3" />
+            <RefreshCw className="w-3.5 h-3.5" />
             <span>Regenerate Code</span>
           </button>
           <button

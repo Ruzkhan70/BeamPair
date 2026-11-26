@@ -154,7 +154,7 @@ export default function App() {
   const isAuthorizedAdmin = !!(adminUser && adminUser.email.toLowerCase() === BOOTSTRAP_ADMIN_EMAIL.toLowerCase());
 
   return (
-    <div className="min-h-screen bg-slate-950 text-slate-100 flex flex-col font-sans selection:bg-indigo-500/30 selection:text-indigo-200">
+    <div className="min-h-dvh bg-slate-950 text-slate-100 flex flex-col font-sans selection:bg-indigo-500/30 selection:text-indigo-200 overflow-x-hidden">
       <Navbar
         currentView={isClientOnly ? 'secondary' : currentView}
         onViewChange={(v) => {
@@ -167,7 +167,7 @@ export default function App() {
       />
 
       {mapsQuotaExceeded && (
-        <div className="bg-amber-50 border-b border-amber-200 text-amber-900 px-4 py-2.5 text-xs md:text-sm text-center sticky top-0 z-50 shadow-sm">
+        <div className="bg-amber-50 border-b border-amber-200 text-amber-900 px-3 sm:px-4 py-2 text-xs md:text-sm text-center sticky top-0 z-50 shadow-sm">
           <span>
             Google Maps Platform quota reached. If you are the app owner, visit{' '}
             <a
@@ -184,30 +184,30 @@ export default function App() {
       )}
 
       {/* Main Content Area */}
-      <main className="flex-1 flex flex-col">
+      <main className="flex-1 flex flex-col min-w-0">
         {isClientOnly ? (
-          <div className="flex-1 py-6 flex items-start justify-center">
+          <div className="flex-1 py-3 sm:py-6 flex items-start justify-center">
             <SecondaryDeviceView
               initialToken={initialPairToken}
               onClearInitialToken={() => setInitialPairToken('')}
             />
           </div>
         ) : !authReady ? (
-          <div className="flex-1 flex flex-col items-center justify-center p-6">
+          <div className="flex-1 flex flex-col items-center justify-center p-4 sm:p-6">
             <Loader2 className="w-8 h-8 text-indigo-400 animate-spin mb-3" />
-            <p className="text-xs text-slate-400 font-mono">Initializing BeamPair secure environment...</p>
+            <p className="text-xs text-slate-400 font-mono text-center">Initializing BeamPair secure environment...</p>
           </div>
         ) : currentView === 'admin' ? (
           !adminUser ? (
             /* Admin Sign-In Screen */
-            <div className="flex-1 flex items-center justify-center p-6 animate-fade-in">
-              <div className="bg-slate-900 border border-slate-800 rounded-2xl p-8 max-w-md w-full text-center shadow-2xl space-y-5">
-                <div className="w-16 h-16 bg-gradient-to-tr from-indigo-600/20 to-indigo-500/10 border border-indigo-500/30 text-indigo-400 rounded-2xl mx-auto flex items-center justify-center shadow-lg shadow-indigo-500/10">
-                  <ShieldCheck className="w-8 h-8" />
+            <div className="flex-1 flex items-center justify-center p-4 sm:p-6 animate-fade-in">
+              <div className="bg-slate-900 border border-slate-800 rounded-2xl p-6 sm:p-8 max-w-md w-full text-center shadow-2xl space-y-5">
+                <div className="w-14 h-14 sm:w-16 sm:h-16 bg-gradient-to-tr from-indigo-600/20 to-indigo-500/10 border border-indigo-500/30 text-indigo-400 rounded-2xl mx-auto flex items-center justify-center shadow-lg shadow-indigo-500/10">
+                  <ShieldCheck className="w-7 h-7 sm:w-8 sm:h-8" />
                 </div>
 
                 <div>
-                  <h3 className="text-lg font-bold text-white tracking-tight">Admin Authentication Required</h3>
+                  <h3 className="text-base sm:text-lg font-bold text-white tracking-tight">Admin Authentication Required</h3>
                   <p className="text-xs text-slate-400 mt-1.5 leading-relaxed">
                     Sign in with your designated Google account to manage registered devices, generate pairing codes, and conduct live WebRTC remote support sessions.
                   </p>
@@ -264,14 +264,14 @@ export default function App() {
             </div>
           ) : !isAuthorizedAdmin ? (
             /* Strict Access Denied Screen for any other user */
-            <div className="flex-1 flex items-center justify-center p-6 animate-fade-in">
-              <div className="bg-slate-900 border border-rose-500/30 rounded-2xl p-8 max-w-md w-full text-center shadow-2xl space-y-5">
-                <div className="w-16 h-16 bg-rose-500/10 border border-rose-500/20 text-rose-400 rounded-2xl mx-auto flex items-center justify-center shadow-lg shadow-rose-500/10">
-                  <Lock className="w-8 h-8" />
+            <div className="flex-1 flex items-center justify-center p-4 sm:p-6 animate-fade-in">
+              <div className="bg-slate-900 border border-rose-500/30 rounded-2xl p-6 sm:p-8 max-w-md w-full text-center shadow-2xl space-y-5">
+                <div className="w-14 h-14 sm:w-16 sm:h-16 bg-rose-500/10 border border-rose-500/20 text-rose-400 rounded-2xl mx-auto flex items-center justify-center shadow-lg shadow-rose-500/10">
+                  <Lock className="w-7 h-7 sm:w-8 sm:h-8" />
                 </div>
 
                 <div>
-                  <h3 className="text-lg font-bold text-white tracking-tight">Access Denied: Restricted Admin Portal</h3>
+                  <h3 className="text-base sm:text-lg font-bold text-white tracking-tight">Access Denied: Restricted Admin Portal</h3>
                   <p className="text-xs text-slate-300 mt-1.5 leading-relaxed">
                     This administrator portal is strictly restricted. Only the designated administrator account is authorized to access device sessions and remote controls.
                   </p>
@@ -319,7 +319,7 @@ export default function App() {
             />
           )
         ) : (
-          <div className="flex-1 py-6 flex items-start justify-center">
+          <div className="flex-1 py-3 sm:py-6 flex items-start justify-center">
             <SecondaryDeviceView
               initialToken={initialPairToken}
               onClearInitialToken={() => setInitialPairToken('')}
@@ -329,13 +329,13 @@ export default function App() {
       </main>
 
       {/* Footer Info */}
-      <footer className="border-t border-slate-900 bg-slate-950/60 py-3 px-6 text-center text-[11px] text-slate-500 flex flex-col sm:flex-row items-center justify-between gap-2">
+      <footer className="border-t border-slate-900 bg-slate-950/60 py-3 pb-[calc(0.75rem+env(safe-area-inset-bottom))] px-4 sm:px-6 text-center text-[11px] text-slate-500 flex flex-col sm:flex-row items-center justify-between gap-1.5 sm:gap-2">
         <div className="flex items-center space-x-2">
-          <span className="w-2 h-2 rounded-full bg-emerald-500" />
-          <span>Real WebRTC PeerConnection & HTTPS Ready</span>
+          <span className="w-2 h-2 rounded-full bg-emerald-500 shrink-0" />
+          <span>Real WebRTC PeerConnection &amp; HTTPS Ready</span>
         </div>
         <div className="text-slate-400">
-          BeamPair Remote Device Support • Enterprise P2P Session Security
+          BeamPair Remote Device Support • Enterprise P2P Security
         </div>
       </footer>
       <OfflineIndicator />

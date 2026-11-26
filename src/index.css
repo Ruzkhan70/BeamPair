@@ -1,1 +1,27 @@
 @import "tailwindcss";
+
+@layer base {
+  html,
+  body {
+    overflow-x: hidden;
+    background-color: #020617;
+    -webkit-tap-highlight-color: transparent;
+  }
+
+  button,
+  a,
+  input,
+  select,
+  textarea {
+    touch-action: manipulation;
+  }
+}
+
+.scrollbar-none {
+  -ms-overflow-style: none;
+  scrollbar-width: none;
+}
+
+.scrollbar-none::-webkit-scrollbar {
+  display: none;
+}
